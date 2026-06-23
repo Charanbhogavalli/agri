@@ -143,8 +143,9 @@ export default function App() {
       const user = await signInWithEmail(email.trim(), password.trim());
       setCurrentUser(user);
       showToast("Logged in successfully!", "success");
-    } catch (err) {
-      showToast(t('loginError', lang), "error");
+    } catch (err: any) {
+      console.error("Email login failed:", err);
+      showToast(err?.message || t('loginError', lang), "error");
     } finally {
       setAuthLoading(false);
     }
@@ -156,8 +157,9 @@ export default function App() {
       const user = await signInWithGoogle();
       setCurrentUser(user);
       showToast("Logged in with Google!", "success");
-    } catch (err) {
-      showToast(t('loginError', lang), "error");
+    } catch (err: any) {
+      console.error("Google Sign-In failed:", err);
+      showToast(err?.message || t('loginError', lang), "error");
     } finally {
       setAuthLoading(false);
     }
