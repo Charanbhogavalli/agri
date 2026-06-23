@@ -401,12 +401,34 @@ export const sendWeeklyReport = async (
     }
   } catch (error: any) {
     console.error("Failed to send weekly report email:", error);
-    // Log as failure but return simulated success fallback to avoid breaking the UI flow
+    
+    let userFriendlyMessage = error.message;
+    try {
+      // Try parsing JSON error from Resend
+      const parsedError = JSON.parse(error.message);
+      if (parsedError.name === 'validation_error' && parsedError.message) {
+        if (parsedError.message.includes('only send testing emails to your own email address')) {
+          const match = parsedError.message.match(/\(([^)]+)\)/);
+          const ownEmail = match ? match[1] : 'rishikanl143@gmail.com';
+          userFriendlyMessage = `⚠️ Resend Sandbox Limit: You can only send emails to your registered Resend email address (${ownEmail}). Please update your weekly report recipients in the Profile page to this email.`;
+        } else {
+          userFriendlyMessage = parsedError.message;
+        }
+      }
+    } catch (e) {
+      // If not JSON, check substring
+      if (error.message && error.message.includes('only send testing emails to your own email address')) {
+        const match = error.message.match(/\(([^)]+)\)/);
+        const ownEmail = match ? match[1] : 'rishikanl143@gmail.com';
+        userFriendlyMessage = `⚠️ Resend Sandbox Limit: You can only send emails to your registered Resend email address (${ownEmail}). Please update your weekly report recipients in the Profile page to this email.`;
+      }
+    }
+
     loggedEmails.push(newLog);
     localStorage.setItem('pramesh_weekly_emails', JSON.stringify(loggedEmails));
     return { 
       success: false, 
-      message: `Failed to send via Resend (${error.message}). Logged to simulated reports.` 
+      message: userFriendlyMessage 
     };
   }
 };
