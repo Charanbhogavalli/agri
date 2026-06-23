@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Plus, Edit2, Trash2, Phone, X, User, MapPin, DollarSign, FileText, Check } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, Phone, X, User, MapPin, DollarSign, FileText, Check, History } from 'lucide-react';
 import { 
   Worker, 
   Payment,
@@ -10,7 +10,8 @@ import {
   editWorker, 
   removeWorker,
   fetchPayments,
-  createPayment
+  createPayment,
+  fetchAttendance
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
@@ -30,12 +31,15 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'name' | 'wage_asc' | 'wage_desc' | 'date'>('name');
   
   // Modals state
   const [showFormModal, setShowFormModal] = useState(false);
   const [showPayModal, setShowPayModal] = useState(false);
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
   const [activeWorkerForPay, setActiveWorkerForPay] = useState<{ worker: Worker; pending: number } | null>(null);
+  const [historyWorker, setHistoryWorker] = useState<Worker | null>(null);
+  const [historyTab, setHistoryTab] = useState<'attendance' | 'payments'>('attendance');
   
   // Worker Form fields
   const [name, setName] = useState('');
@@ -64,7 +68,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       const paymentsData = await fetchPayments();
       setPayments(paymentsData);
       
-      const allAtt = JSON.parse(localStorage.getItem('pramesh_attendance') || '[]');
+      const allAtt = await fetchAttendance();
       setAttendance(allAtt);
     } catch (e) {
       showToast("Error loading workers data", "error");
@@ -128,9 +132,11 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       };
 
       if (editingWorker) {
+        if (!window.confirm("Are you sure you want to save changes to this worker?")) return;
         await editWorker(editingWorker.id, workerData);
         showToast("Worker updated successfully", "success");
       } else {
+        if (!window.confirm("Are you sure you want to add this new worker?")) return;
         await createWorker(workerData);
         showToast("Worker added successfully", "success");
       }
@@ -154,6 +160,10 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
 
     setSavingPayment(true);
     try {
+      if (!window.confirm(`Are you sure you want to record a payment of ₹${amtNum} to ${activeWorkerForPay.worker.name}?`)) {
+        setSavingPayment(false);
+        return;
+      }
       await createPayment({
         workerId: activeWorkerForPay.worker.id,
         amount: amtNum,
@@ -183,11 +193,24 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
     }
   };
 
-  // Filter workers based on search query
-  const filteredWorkers = workers.filter(w => 
-    w.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    w.village.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Filter and sort workers based on state
+  const sortedAndFilteredWorkers = workers
+    .filter(w => 
+      w.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      w.village.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => {
+      if (sortBy === 'name') {
+        return a.name.localeCompare(b.name);
+      } else if (sortBy === 'wage_asc') {
+        return a.dailyWage - b.dailyWage;
+      } else if (sortBy === 'wage_desc') {
+        return b.dailyWage - a.dailyWage;
+      } else if (sortBy === 'date') {
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      }
+      return 0;
+    });
 
   return (
     <div className="flex-1 p-4 pb-24 overflow-y-auto no-scrollbar flex flex-col">
@@ -211,7 +234,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       </div>
 
       {/* Search Input */}
-      <div className="relative mb-5 shrink-0">
+      <div className="relative mb-4 shrink-0">
         <input
           type="text"
           value={searchQuery}
@@ -222,12 +245,49 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
         <Search className="absolute left-4 top-3.5 text-gray-400" size={18} />
       </div>
 
+      {/* Sort Options */}
+      <div className="flex gap-2 overflow-x-auto pb-3 mb-4 no-scrollbar select-none shrink-0 items-center">
+        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1 shrink-0">Sort By:</span>
+        <button
+          onClick={() => setSortBy('name')}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all cursor-pointer ${
+            sortBy === 'name' ? 'bg-primary text-white shadow-sm' : 'bg-white text-gray-500 border border-[#E0DBC5]/40'
+          }`}
+        >
+          Name
+        </button>
+        <button
+          onClick={() => setSortBy('wage_asc')}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all cursor-pointer ${
+            sortBy === 'wage_asc' ? 'bg-primary text-white shadow-sm' : 'bg-white text-gray-500 border border-[#E0DBC5]/40'
+          }`}
+        >
+          Wage: Low-High
+        </button>
+        <button
+          onClick={() => setSortBy('wage_desc')}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all cursor-pointer ${
+            sortBy === 'wage_desc' ? 'bg-primary text-white shadow-sm' : 'bg-white text-gray-500 border border-[#E0DBC5]/40'
+          }`}
+        >
+          Wage: High-Low
+        </button>
+        <button
+          onClick={() => setSortBy('date')}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 transition-all cursor-pointer ${
+            sortBy === 'date' ? 'bg-primary text-white shadow-sm' : 'bg-white text-gray-500 border border-[#E0DBC5]/40'
+          }`}
+        >
+          Date Added
+        </button>
+      </div>
+
       {/* Workers list */}
       {loading ? (
         <div className="flex-1 flex items-center justify-center py-20">
           <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
-      ) : filteredWorkers.length === 0 ? (
+      ) : sortedAndFilteredWorkers.length === 0 ? (
         /* Empty State Illustration */
         <div className="flex-1 flex flex-col items-center justify-center p-8 bg-white border border-[#E0DBC5]/30 rounded-3xl shadow-soft min-h-[350px]">
           <svg className="w-40 h-40 text-[#81C784]/30" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -255,12 +315,15 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
         </div>
       ) : (
         <div className="space-y-4 flex-1">
-          {filteredWorkers.map(w => {
-            // Wage calculations
-            const daysWorked = attendance.filter(a => a.workerId === w.id && a.status === 'present').length;
-            const earned = daysWorked * w.dailyWage;
+          {sortedAndFilteredWorkers.map(w => {
+            // Wage calculations (incorporating half days)
+            const presentDays = attendance.filter(a => a.workerId === w.id && a.status === 'present').length;
+            const halfDays = attendance.filter(a => a.workerId === w.id && a.status === 'half_day').length;
+            const earned = (presentDays + (halfDays * 0.5)) * w.dailyWage;
             const paid = payments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
-            const pending = Math.max(0, earned - paid);
+            const pending = earned - paid;
+            const pendingVal = pending > 0 ? pending : 0;
+            const advanceVal = pending < 0 ? Math.abs(pending) : 0;
 
             return (
               <div
@@ -307,12 +370,12 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                   </div>
                   <div>
                     <span className="text-[9px] text-gray-400 font-extrabold uppercase block tracking-wider">
-                      Pending
+                      {advanceVal > 0 ? 'Advance' : 'Pending'}
                     </span>
                     <span className={`text-sm font-black block mt-0.5 ${
-                      pending > 0 ? 'text-danger-red animate-pulse-soft' : 'text-success-green'
+                      pendingVal > 0 ? 'text-danger-red animate-pulse-soft' : 'text-success-green'
                     }`}>
-                      ₹{pending}
+                      ₹{advanceVal > 0 ? advanceVal : pendingVal}
                     </span>
                   </div>
                 </div>
@@ -330,19 +393,29 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                     <button
                       onClick={() => handleDelete(w.id)}
                       className="p-2.5 bg-danger-red/10 text-danger-red rounded-xl active:scale-90 transition-all cursor-pointer"
+                      title="Delete Worker"
                     >
                       <Trash2 size={15} />
                     </button>
                     <button
                       onClick={() => openEditModal(w)}
                       className="p-2.5 bg-primary/10 text-primary rounded-xl active:scale-90 transition-all cursor-pointer"
+                      title="Edit Details"
                     >
                       <Edit2 size={15} />
+                    </button>
+                    <button
+                      onClick={() => setHistoryWorker(w)}
+                      className="p-2.5 bg-accent/10 text-accent rounded-xl active:scale-90 transition-all cursor-pointer"
+                      title="View Ledger Statement"
+                    >
+                      <History size={15} />
                     </button>
                     {w.phone && (
                       <a
                         href={`tel:${w.phone}`}
                         className="p-2.5 bg-success-green/10 text-success-green rounded-xl active:scale-90 transition-all cursor-pointer"
+                        title="Call Worker"
                       >
                         <Phone size={15} />
                       </a>
@@ -351,7 +424,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
 
                   {/* Direct payment CTA */}
                   <button
-                    onClick={() => openPayDirectModal(w, pending)}
+                    onClick={() => openPayDirectModal(w, pendingVal)}
                     className="px-4 py-2 bg-accent text-white font-extrabold rounded-xl shadow-sm text-xs btn-active-scale cursor-pointer flex items-center gap-1"
                   >
                     <DollarSign size={13} />
@@ -607,6 +680,143 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Worker History Drawer Sheet */}
+      <AnimatePresence>
+        {historyWorker && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end justify-center p-4">
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+              className="bg-white w-full max-w-md rounded-t-3xl p-6 shadow-premium relative border-t border-[#E0DBC5] max-h-[90vh] overflow-y-auto flex flex-col"
+            >
+              <button 
+                onClick={() => setHistoryWorker(null)}
+                className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-xl font-bold text-text-dark mb-1">
+                Worker History & Ledger
+              </h3>
+              <p className="text-xs text-gray-400 font-semibold mb-4">
+                Detailed statement for <strong className="text-primary">{historyWorker.name}</strong>
+              </p>
+
+              {/* Stats Card */}
+              {(() => {
+                const wAtt = attendance.filter(a => a.workerId === historyWorker.id);
+                const wPay = payments.filter(p => p.workerId === historyWorker.id);
+                
+                const pDays = wAtt.filter(a => a.status === 'present').length;
+                const hDays = wAtt.filter(a => a.status === 'half_day').length;
+                const totalEarned = (pDays + (hDays * 0.5)) * historyWorker.dailyWage;
+                const totalPaid = wPay.reduce((sum, p) => sum + p.amount, 0);
+                const balance = totalEarned - totalPaid;
+                
+                return (
+                  <>
+                    <div className="grid grid-cols-4 gap-2 bg-[#F8F5E9]/50 p-3 rounded-2xl border border-[#E0DBC5] text-center mb-4 text-[10px]">
+                      <div>
+                        <span className="text-[8px] text-gray-400 font-bold block uppercase">Days Worked</span>
+                        <span className="text-xs font-black text-text-dark block mt-1">{pDays + hDays * 0.5}</span>
+                      </div>
+                      <div>
+                        <span className="text-[8px] text-gray-400 font-bold block uppercase">Earned</span>
+                        <span className="text-xs font-black text-text-dark block mt-1">₹{totalEarned}</span>
+                      </div>
+                      <div>
+                        <span className="text-[8px] text-gray-400 font-bold block uppercase">Paid</span>
+                        <span className="text-xs font-black text-success-green block mt-1">₹{totalPaid}</span>
+                      </div>
+                      <div>
+                        {balance >= 0 ? (
+                          <>
+                            <span className="text-[8px] text-gray-400 font-bold block uppercase">Pending</span>
+                            <span className="text-xs font-black text-danger-red block mt-1">₹{balance}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-[8px] text-gray-400 font-bold block uppercase">Advance</span>
+                            <span className="text-xs font-black text-success-green block mt-1">₹{Math.abs(balance)}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Tabs inside history drawer */}
+                    <div className="flex bg-[#F8F5E9] p-1 rounded-xl border border-[#E0DBC5]/50 mb-4 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setHistoryTab('attendance')}
+                        className={`flex-1 py-2 font-bold rounded-lg transition-all cursor-pointer ${
+                          historyTab === 'attendance' ? 'bg-primary text-white shadow-sm' : 'text-gray-500'
+                        }`}
+                      >
+                        Attendance ({wAtt.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryTab('payments')}
+                        className={`flex-1 py-2 font-bold rounded-lg transition-all cursor-pointer ${
+                          historyTab === 'payments' ? 'bg-primary text-white shadow-sm' : 'text-gray-500'
+                        }`}
+                      >
+                        Payments ({wPay.length})
+                      </button>
+                    </div>
+
+                    {/* Tab contents */}
+                    <div className="flex-1 min-h-[250px] overflow-y-auto max-h-[40vh] space-y-2 pr-1 no-scrollbar">
+                      {historyTab === 'attendance' ? (
+                        wAtt.length === 0 ? (
+                          <div className="text-center py-10 text-gray-400 text-xs">No attendance recorded.</div>
+                        ) : (
+                          [...wAtt]
+                            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                            .map(a => (
+                              <div key={a.id || a.date} className="flex justify-between items-center bg-[#F8F5E9]/20 border border-[#E0DBC5]/10 p-2.5 rounded-xl">
+                                <span className="text-xs font-bold text-text-dark">{a.date}</span>
+                                <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
+                                  a.status === 'present' 
+                                    ? 'bg-success-green/10 text-success-green' 
+                                    : a.status === 'half_day'
+                                      ? 'bg-amber-100 text-amber-700'
+                                      : 'bg-danger-red/10 text-danger-red'
+                                }`}>
+                                  {a.status === 'half_day' ? 'Half Day' : a.status}
+                                </span>
+                              </div>
+                            ))
+                        )
+                      ) : (
+                        wPay.length === 0 ? (
+                          <div className="text-center py-10 text-gray-400 text-xs">No payments recorded.</div>
+                        ) : (
+                          [...wPay]
+                            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                            .map(p => (
+                              <div key={p.id} className="flex justify-between items-start bg-[#F8F5E9]/20 border border-[#E0DBC5]/10 p-2.5 rounded-xl text-xs">
+                                <div>
+                                  <span className="font-bold text-text-dark block">₹{p.amount}</span>
+                                  {p.note && <span className="text-[9px] text-gray-400 block mt-0.5">{p.note}</span>}
+                                </div>
+                                <span className="text-[10px] font-semibold text-gray-400">{p.date}</span>
+                              </div>
+                            ))
+                        )
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </motion.div>
           </div>
         )}

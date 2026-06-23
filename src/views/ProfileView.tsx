@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   AlertTriangle
 } from 'lucide-react';
-import { mockSignOut, isMockMode, resetMockData, clearAllDatabaseData } from '../firebase';
+import { logoutUser, isMockMode, resetMockData, clearAllDatabaseData, fetchEmailRecipients, saveEmailRecipients } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
 interface ProfileViewProps {
@@ -43,22 +43,45 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     loadSettings();
   }, []);
 
-  const loadSettings = () => {
-    const settingsStr = localStorage.getItem('pramesh_settings');
+  const loadSettings = async () => {
+    const settingsStr = localStorage.getItem('paramesh_settings');
+    let admin = '';
+    let sender = 'onboarding@resend.dev';
     if (settingsStr) {
       try {
         const parsed = JSON.parse(settingsStr);
-        setFatherEmail(parsed.fatherEmail || 'father@example.com');
-        setFamilyEmail(parsed.familyEmail || 'family@example.com');
-        setAdminEmail(parsed.adminEmail || 'admin@example.com');
-        setSenderEmail(parsed.senderEmail || 'onboarding@resend.dev');
+        admin = parsed.adminEmail || '';
+        sender = parsed.senderEmail || 'onboarding@resend.dev';
       } catch (e) {}
+    }
+    setAdminEmail(admin);
+    setSenderEmail(sender);
+
+    try {
+      const dbRecipients = await fetchEmailRecipients();
+      const father = dbRecipients ? dbRecipients.fatherEmail : '';
+      const family = dbRecipients ? dbRecipients.familyEmail : '';
+      setFatherEmail(father);
+      setFamilyEmail(family);
+
+      // Sync local storage for resend service configuration
+      const updatedLocal = settingsStr ? JSON.parse(settingsStr) : {};
+      updatedLocal.fatherEmail = father;
+      updatedLocal.familyEmail = family;
+      localStorage.setItem('paramesh_settings', JSON.stringify(updatedLocal));
+    } catch (e) {
+      console.error("Failed to load recipients from Firestore:", e);
     }
   };
 
-  const handleSaveRecipients = () => {
+  const handleSaveRecipients = async () => {
     try {
-      const savedSettings = localStorage.getItem('pramesh_settings');
+      await saveEmailRecipients({
+        fatherEmail: fatherEmail.trim(),
+        familyEmail: familyEmail.trim()
+      });
+
+      const savedSettings = localStorage.getItem('paramesh_settings');
       let parsedSettings = {};
       if (savedSettings) {
         try {
@@ -74,42 +97,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         senderEmail: senderEmail.trim()
       };
 
-      localStorage.setItem('pramesh_settings', JSON.stringify(updated));
+      localStorage.setItem('paramesh_settings', JSON.stringify(updated));
       showToast("Recipients updated successfully!", "success");
     } catch (e) {
       showToast("Failed to save recipients", "error");
     }
   };
 
-  const handleResetDemoData = () => {
-    if (window.confirm("This will erase current database logs and reset back to original demo workers/wages. Continue?")) {
-      resetMockData();
-      showToast(t('resetSuccess', lang), "success");
-      setTimeout(() => {
-        window.location.reload();
-      }, 1000);
-    }
-  };
-
-  const handleClearDatabase = async () => {
-    if (window.confirm(t('clearDataConfirm', lang))) {
-      if (window.confirm("Are you absolutely sure? This will permanently delete all worker profiles, payments, expenses, and attendance logs. This action CANNOT be undone!")) {
-        try {
-          await clearAllDatabaseData();
-          showToast(t('clearDataSuccess', lang), "success");
-          setTimeout(() => {
-            window.location.reload();
-          }, 1000);
-        } catch (e) {
-          showToast("Failed to clear database data", "error");
-        }
-      }
-    }
-  };
-
   const handleLogoutAction = async () => {
     if (window.confirm("Logout from AgriBook?")) {
-      await mockSignOut();
+      await logoutUser();
       onLogout();
     }
   };
@@ -133,10 +130,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
         <div className="overflow-hidden">
           <h2 className="text-lg font-bold text-text-dark leading-tight truncate">
-            {currentUser?.displayName || 'Pramesh Kumar'}
+            {currentUser?.displayName || 'Paramesh Kumar'}
           </h2>
           <span className="text-xs text-gray-400 font-semibold block mt-1 truncate">
-            {currentUser?.email || 'pramesh@agribook.com'}
+            {currentUser?.email || 'paramesh@agribook.com'}
           </span>
         </div>
       </div>
@@ -243,7 +240,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               type="email"
               value={fatherEmail}
               onChange={(e) => setFatherEmail(e.target.value)}
-              placeholder="father@example.com"
+              placeholder="Enter email address"
               className="form-input"
             />
           </div>
@@ -257,7 +254,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               type="email"
               value={familyEmail}
               onChange={(e) => setFamilyEmail(e.target.value)}
-              placeholder="family@example.com"
+              placeholder="Enter email address"
               className="form-input"
             />
           </div>
@@ -271,7 +268,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               type="email"
               value={adminEmail}
               onChange={(e) => setAdminEmail(e.target.value)}
-              placeholder="admin@example.com"
+              placeholder="Enter email address"
               className="form-input"
             />
           </div>
@@ -302,33 +299,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         )}
       </div>
 
-      {/* App Version & Sandbox Tools */}
-      <div className="space-y-3">
-        <div className="flex gap-3">
-          <div className="flex-1 bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft text-center flex flex-col justify-center">
-            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">
-              {t('appVersionLabel', lang)}
-            </span>
-            <span className="text-sm font-extrabold text-text-dark block mt-1">
-              v1.2.0 (Build 2026)
-            </span>
-          </div>
-          <button
-            onClick={handleResetDemoData}
-            className="flex-1 p-4 bg-white border border-[#E0DBC5]/40 hover:bg-gray-50 rounded-2xl shadow-soft text-center text-xs font-bold text-accent active:scale-95 transition-all flex flex-col items-center justify-center gap-1 cursor-pointer"
-          >
-            <RotateCcw size={16} />
-            <span>{bilingual ? `${t('resetMockButton', lang)} / ${subT('resetMockButton', lang)}` : t('resetMockButton', lang)}</span>
-          </button>
-        </div>
-
-        <button
-          onClick={handleClearDatabase}
-          className="w-full py-4 bg-danger-red/10 border border-danger-red/20 hover:bg-danger-red/15 rounded-2xl shadow-soft text-center text-xs font-bold text-danger-red active:scale-95 transition-all flex items-center justify-center gap-2 cursor-pointer"
-        >
-          <AlertTriangle size={16} className="text-danger-red animate-pulse-soft" />
-          <span>{bilingual ? `${t('clearDataButton', lang)} / ${subT('clearDataButton', lang)}` : t('clearDataButton', lang)}</span>
-        </button>
+      {/* App Version */}
+      <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft text-center flex flex-col justify-center">
+        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">
+          {t('appVersionLabel', lang)}
+        </span>
+        <span className="text-sm font-extrabold text-text-dark block mt-1">
+          v1.2.0 (Build 2026)
+        </span>
       </div>
 
       {/* Logout */}

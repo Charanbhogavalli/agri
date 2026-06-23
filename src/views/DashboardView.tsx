@@ -25,11 +25,12 @@ import {
   fetchExpenses,
   fetchPayments,
   fetchAttendanceByDate,
+  fetchAttendance,
   createPayment,
   createExpense
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
-import { parseNaturalLanguage, generateAIObservations, AIObservation, ParsedTransaction } from '../services/gemini';
+import { parseNaturalLanguage, getInsightsList, AIObservation, ParsedTransaction } from '../services/gemini';
 import { calculateWeeklyReport, sendWeeklyReport } from '../services/resend';
 
 interface DashboardViewProps {
@@ -38,6 +39,35 @@ interface DashboardViewProps {
   onNavigate: (view: string) => void;
   showToast: (message: string, type: 'success' | 'error') => void;
 }
+
+const getLocalDateString = (d: Date = new Date()) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getLocalMonthString = (d: Date = new Date()) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+};
+
+const getPreviousSundayDate = (d: Date = new Date()): string => {
+  const day = d.getDay();
+  const diff = day === 0 ? 7 : day;
+  const prevSunday = new Date(d);
+  prevSunday.setDate(d.getDate() - diff);
+  return prevSunday.toISOString().split('T')[0];
+};
+
+const getWeekRange = (sundayDateStr: string) => {
+  const sunday = new Date(sundayDateStr);
+  const monday = new Date(sunday);
+  monday.setDate(sunday.getDate() - 6);
+  const formatOptions: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
+  return `${monday.toLocaleDateString('en-US', formatOptions)} - ${sunday.toLocaleDateString('en-US', formatOptions)}`;
+};
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   lang,
@@ -49,6 +79,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord[]>([]);
+  const [allAttendance, setAllAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
   // NLP Input State
@@ -65,8 +96,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [weeklyReportSent, setWeeklyReportSent] = useState<boolean | null>(null);
   const [sendingReport, setSendingReport] = useState(false);
 
-  const todayDateStr = '2026-06-23'; // Target system date (Tuesday)
-
   useEffect(() => {
     loadData();
   }, []);
@@ -77,26 +106,34 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       const workersData = await fetchWorkers();
       const expensesData = await fetchExpenses();
       const paymentsData = await fetchPayments();
-      const attData = await fetchAttendanceByDate(todayDateStr);
+      const allAttData = await fetchAttendance();
+      const todayStr = getLocalDateString();
+      const currentMonthStr = getLocalMonthString();
+
+      const todayAtt = allAttData.filter(a => a.date === todayStr);
 
       setWorkers(workersData);
       setExpenses(expensesData);
       setPayments(paymentsData);
-      setTodayAttendance(attData);
+      setTodayAttendance(todayAtt);
+      setAllAttendance(allAttData);
 
       // Check if weekly report for the previous Sunday has been sent
-      const logged = JSON.parse(localStorage.getItem('pramesh_weekly_emails') || '[]');
-      const isSent = logged.some((e: any) => e.weekRange.includes("Jun 15") && e.success);
+      const prevSundayStr = getPreviousSundayDate();
+      const expectedWeekRange = getWeekRange(prevSundayStr);
+      const logged = JSON.parse(localStorage.getItem('paramesh_weekly_emails') || '[]');
+      const isSent = logged.some((e: any) => e.weekRange === expectedWeekRange && e.success);
       setWeeklyReportSent(isSent);
 
-      // Load AI Insights
+      // Load AI Insights programmatically
       setInsightsLoading(true);
-      const obs = await generateAIObservations(workersData, expensesData, paymentsData);
+      const obs = getInsightsList(workersData, expensesData, paymentsData, allAttData, currentMonthStr);
       setInsights(obs);
     } catch (e) {
       console.error(e);
       showToast("Error loading dashboard data", "error");
     } finally {
+      setInsightsLoading(false);
       setLoading(false);
     }
   };
@@ -105,8 +142,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const handleSendWeeklyReport = async () => {
     setSendingReport(true);
     try {
-      const allAttendance = JSON.parse(localStorage.getItem('pramesh_attendance') || '[]');
-      const calculatedReport = calculateWeeklyReport(workers, allAttendance, payments, expenses, '2026-06-21');
+      const allAttData = await fetchAttendance();
+      const prevSundayStr = getPreviousSundayDate();
+      const calculatedReport = calculateWeeklyReport(workers, allAttData, payments, expenses, prevSundayStr);
       
       const result = await sendWeeklyReport(calculatedReport);
       if (result.success) {
@@ -161,6 +199,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           category: parsedResult.category || 'Others',
           amount: parsedResult.amount,
           description: parsedResult.description,
+          notes: '',
           date: parsedResult.date
         });
         showToast(t('expenseSuccess', lang), "success");
@@ -178,33 +217,43 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     }
   };
 
-  // Calculations for dashboard (June 2026)
-  const presentCount = todayAttendance.filter(a => a.status === 'present').length;
+  const currentMonthStr = getLocalMonthString();
+
+  // Calculations for dashboard incorporating half_day status
+  const presentCount = todayAttendance.reduce((sum, a) => {
+    if (a.status === 'present') return sum + 1;
+    if (a.status === 'half_day') return sum + 0.5;
+    return sum;
+  }, 0);
   const activeWorkersCount = workers.filter(w => w.status === 'active').length;
 
   const currentMonthExpenses = expenses
-    .filter(e => e.date.startsWith('2026-06'))
+    .filter(e => e.date.startsWith(currentMonthStr))
     .reduce((sum, e) => sum + e.amount, 0);
 
   const currentMonthPayments = payments
-    .filter(p => p.date.startsWith('2026-06'))
+    .filter(p => p.date.startsWith(currentMonthStr))
     .reduce((sum, p) => sum + p.amount, 0);
 
-  const allAtt = JSON.parse(localStorage.getItem('pramesh_attendance') || '[]');
-  const currentMonthAttendance = allAtt.filter((a: any) => a.date.startsWith('2026-06') && a.status === 'present');
+  const currentMonthAttendance = allAttendance.filter((a: any) => a.date.startsWith(currentMonthStr));
   
   let totalLaborCost = 0;
   workers.forEach(w => {
-    const days = currentMonthAttendance.filter((a: any) => a.workerId === w.id).length;
+    const workerAtt = currentMonthAttendance.filter((a: any) => a.workerId === w.id);
+    const days = workerAtt.reduce((sum, a) => {
+      if (a.status === 'present') return sum + 1;
+      if (a.status === 'half_day') return sum + 0.5;
+      return sum;
+    }, 0);
     totalLaborCost += days * w.dailyWage;
   });
 
   const pendingWages = Math.max(0, totalLaborCost - currentMonthPayments);
   const totalSpending = totalLaborCost + currentMonthExpenses;
 
-  // 1. Highest Paid Worker (June 2026)
+  // 1. Highest Paid Worker (dynamic month)
   const payMap: Record<string, number> = {};
-  payments.filter(p => p.date.startsWith('2026-06')).forEach(p => {
+  payments.filter(p => p.date.startsWith(currentMonthStr)).forEach(p => {
     payMap[p.workerId] = (payMap[p.workerId] || 0) + p.amount;
   });
   let maxPay = 0;
@@ -218,10 +267,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const topPaidWorker = workers.find(w => w.id === maxWorkerId);
   const highestPaidWorkerStr = topPaidWorker ? `${topPaidWorker.name} (₹${maxPay})` : 'None';
 
-  // 2. Most Regular Worker (June 2026)
+  // 2. Most Regular Worker (dynamic month)
   const attMap: Record<string, number> = {};
-  allAtt.filter((a: any) => a.date.startsWith('2026-06') && a.status === 'present').forEach((a: any) => {
-    attMap[a.workerId] = (attMap[a.workerId] || 0) + 1;
+  currentMonthAttendance.forEach((a: any) => {
+    const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
+    attMap[a.workerId] = (attMap[a.workerId] || 0) + weight;
   });
   let maxDays = 0;
   let regularWorkerId = '';
@@ -234,9 +284,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const topRegularWorker = workers.find(w => w.id === regularWorkerId);
   const mostRegularWorkerStr = topRegularWorker ? `${topRegularWorker.name} (${maxDays} days)` : 'None';
 
-  // 3. Biggest Expense Category (June 2026)
+  // 3. Biggest Expense Category (dynamic month)
   const expMap: Record<string, number> = {};
-  expenses.filter(e => e.date.startsWith('2026-06')).forEach(e => {
+  expenses.filter(e => e.date.startsWith(currentMonthStr)).forEach(e => {
     expMap[e.category] = (expMap[e.category] || 0) + e.amount;
   });
   let maxExp = 0;

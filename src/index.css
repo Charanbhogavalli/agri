@@ -39,10 +39,8 @@ body {
 }
 
 .glass-header {
-  background: rgba(248, 245, 233, 0.92);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border-bottom: 1px solid rgba(224, 219, 197, 0.4);
+  background: #F8F5E9; /* Solid background matching body */
+  border-bottom: 1px solid rgba(224, 219, 197, 0.6);
 }
 
 .glass-card {

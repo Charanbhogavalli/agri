@@ -5,19 +5,16 @@ import {
   Search, 
   X, 
   Check, 
-  AlertCircle,
-  Calendar,
+  Calendar, 
   Layers,
   Fuel, 
   Sprout, 
   Trash2,
-  Settings,
-  Truck,
-  Wrench,
-  Users,
-  Compass
+  Edit2,
+  FileText,
+  Filter
 } from 'lucide-react';
-import { Expense, fetchExpenses, createExpense } from '../firebase';
+import { Expense, fetchExpenses, createExpense, editExpense, removeExpense } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
 interface ExpensesViewProps {
@@ -33,26 +30,43 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
 }) => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  // Search & Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('All');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
-  // Modal State
-  const [showModal, setShowModal] = useState(false);
+  // Modals state
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingExpenseObj, setEditingExpenseObj] = useState<Expense | null>(null);
+
+  // Form Fields
   const [category, setCategory] = useState<Expense['category']>('Others');
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
+  const [notes, setNotes] = useState('');
   const [date, setDate] = useState('2026-06-23'); // Target system date
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     loadExpenses();
-  }, []);
+  }, [startDate, endDate]);
 
   const loadExpenses = async () => {
     setLoading(true);
     try {
       const data = await fetchExpenses();
-      const sorted = data.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      // Filter by date range first
+      const dateFiltered = data.filter(e => {
+        const matchesStart = startDate ? e.date >= startDate : true;
+        const matchesEnd = endDate ? e.date <= endDate : true;
+        return matchesStart && matchesEnd;
+      });
+
+      const sorted = dateFiltered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setExpenses(sorted);
     } catch (e) {
       showToast("Error loading expenses", "error");
@@ -61,7 +75,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
     }
   };
 
-  const handleSave = async (e: React.FormEvent) => {
+  const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const amtNum = parseFloat(amount);
@@ -75,21 +89,28 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
       return;
     }
 
+    if (!window.confirm(`Are you sure you want to add this expense of ₹${amtNum} under ${category}?`)) {
+      return;
+    }
+
     setSaving(true);
     try {
       await createExpense({
         category,
         amount: amtNum,
         description: description.trim(),
+        notes: notes.trim(),
         date
       });
 
-      showToast(t('expenseSuccess', lang), "success");
-      setShowModal(false);
+      showToast("Expense recorded successfully!", "success");
+      setShowAddModal(false);
       
+      // Reset form
       setCategory('Others');
       setAmount('');
       setDescription('');
+      setNotes('');
       setDate('2026-06-23');
       
       loadExpenses();
@@ -97,6 +118,70 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
       showToast("Failed to save expense", "error");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const openEditModal = (exp: Expense) => {
+    setEditingExpenseObj(exp);
+    setCategory(exp.category);
+    setAmount(exp.amount.toString());
+    setDescription(exp.description);
+    setNotes(exp.notes || '');
+    setDate(exp.date);
+    setShowEditModal(true);
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingExpenseObj) return;
+
+    const amtNum = parseFloat(amount);
+    if (isNaN(amtNum) || amtNum <= 0) {
+      showToast("Please enter a valid expense amount", "error");
+      return;
+    }
+
+    if (!description.trim()) {
+      showToast("Please enter a short description", "error");
+      return;
+    }
+
+    if (!window.confirm("Are you sure you want to update this expense record?")) {
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await editExpense(editingExpenseObj.id, {
+        category,
+        amount: amtNum,
+        description: description.trim(),
+        notes: notes.trim(),
+        date
+      });
+
+      showToast("Expense updated successfully!", "success");
+      setShowEditModal(false);
+      setEditingExpenseObj(null);
+      loadExpenses();
+    } catch (error) {
+      showToast("Failed to update expense", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (expenseId: string, amount: number, desc: string) => {
+    if (!window.confirm(`Are you sure you want to delete the expense of ₹${amount} for "${desc}"?`)) {
+      return;
+    }
+
+    try {
+      await removeExpense(expenseId);
+      showToast("Expense deleted successfully!", "success");
+      loadExpenses();
+    } catch (error) {
+      showToast("Failed to delete expense", "error");
     }
   };
 
@@ -113,34 +198,35 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
         return { emoji: '🚜', label: 'Tractor', bg: 'bg-[#F3E5F5] text-[#4A148C]', border: 'border-[#BA68C8]/30' };
       case 'Transport':
         return { emoji: '🚚', label: 'Transport', bg: 'bg-[#E1F5FE] text-[#01579B]', border: 'border-[#4FC3F7]/30' };
+      case 'Equipment':
+        return { emoji: '🛠️', label: 'Equipment', bg: 'bg-[#ECEFF1] text-[#455A64]', border: 'border-[#B0BEC5]/30' };
+      case 'Labor':
+        return { emoji: '👷', label: 'Labor', bg: 'bg-[#E8F5E9] text-[#2E7D32]', border: 'border-[#A5D6A7]/30' };
       default:
         return { emoji: '📦', label: 'Others', bg: 'bg-[#ECEFF1] text-[#37474F]', border: 'border-[#90A4AE]/30' };
     }
   };
 
   const categoriesList: Expense['category'][] = [
-    'Seeds', 'Fertilizer', 'Diesel', 'Tractor', 'Transport', 'Others'
+    'Seeds', 'Fertilizer', 'Diesel', 'Tractor', 'Transport', 'Equipment', 'Labor', 'Others'
   ];
 
   // Filter list
   const filteredExpenses = expenses.filter(e => {
-    // Map standard firebase data to simplified categories if needed (e.g. Labor -> Others)
     const matchesSearch = e.description.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          e.category.toLowerCase().includes(searchQuery.toLowerCase());
+                          e.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                          (e.notes && e.notes.toLowerCase().includes(searchQuery.toLowerCase()));
     
-    // Normalize filter match
-    let mappedCat = e.category;
-    if (e.category === 'Labor' || e.category === 'Equipment') {
-      mappedCat = 'Others';
-    }
-    const matchesCatFilter = selectedCategoryFilter === 'All' || mappedCat === selectedCategoryFilter;
+    const matchesCatFilter = selectedCategoryFilter === 'All' || e.category === selectedCategoryFilter;
     return matchesSearch && matchesCatFilter;
   });
+
+  const totalExpenseSum = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
 
   return (
     <div className="flex-1 p-4 pb-24 overflow-y-auto no-scrollbar flex flex-col">
       {/* Title block */}
-      <div className="mb-5 flex justify-between items-center">
+      <div className="mb-5 flex justify-between items-center shrink-0">
         <div>
           <h1 className="text-2xl font-extrabold text-text-dark">
             {bilingual ? `${t('expensesPage', lang)} / ${subT('expensesPage', lang)}` : t('expensesPage', lang)}
@@ -151,8 +237,12 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
         </div>
         <button
           onClick={() => {
+            setCategory('Others');
+            setAmount('');
+            setDescription('');
+            setNotes('');
             setDate('2026-06-23');
-            setShowModal(true);
+            setShowAddModal(true);
           }}
           className="bg-primary text-white p-3 rounded-2xl shadow-soft btn-active-scale cursor-pointer flex items-center gap-1 font-bold text-sm"
         >
@@ -161,16 +251,53 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
         </button>
       </div>
 
-      {/* Search Input */}
-      <div className="relative mb-4 shrink-0">
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search descriptions or categories..."
-          className="w-full bg-white border border-[#E0DBC5] text-text-dark font-medium rounded-2xl py-3.5 pl-11 pr-4 text-sm focus:outline-none focus:border-primary transition-all placeholder-gray-400"
-        />
-        <Search className="absolute left-4 top-3.5 text-gray-400" size={18} />
+      {/* Dynamic Total Cost Card */}
+      <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft text-center mb-4 shrink-0">
+        <span className="text-[9px] text-gray-400 font-bold uppercase tracking-wider block">
+          Total Filtered Expenses
+        </span>
+        <span className="text-xl font-black text-danger-red block mt-1">
+          ₹{totalExpenseSum}
+        </span>
+      </div>
+
+      {/* Filter Options Card */}
+      <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-3 mb-4 shrink-0">
+        <div className="flex gap-2">
+          {/* Search Input */}
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search description, notes or category..."
+              className="w-full bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-medium rounded-xl py-2.5 pl-9 pr-3 text-xs focus:outline-none focus:border-primary transition-all placeholder-gray-400"
+            />
+            <Search className="absolute left-3 top-3 text-gray-400" size={15} />
+          </div>
+        </div>
+
+        {/* Date Filters */}
+        <div className="grid grid-cols-2 gap-2 pt-1">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[8px] font-bold text-gray-400 uppercase tracking-wider pl-1">Start Date</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-medium rounded-xl py-2 px-3 text-[11px] focus:outline-none focus:border-primary"
+            />
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[8px] font-bold text-gray-400 uppercase tracking-wider pl-1">End Date</span>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="w-full bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-medium rounded-xl py-2 px-3 text-[11px] focus:outline-none focus:border-primary"
+            />
+          </div>
+        </div>
       </div>
 
       {/* Horizontal Category Scroll Filters */}
@@ -206,65 +333,70 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
           <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
         </div>
       ) : filteredExpenses.length === 0 ? (
-        /* Empty State Illustration */
+        /* Empty State */
         <div className="flex-1 flex flex-col items-center justify-center p-8 bg-white border border-[#E0DBC5]/30 rounded-3xl shadow-soft min-h-[300px]">
-          <svg className="w-36 h-36 text-primary/20" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="50" y="60" width="100" height="90" rx="14" fill="#E8F5E9" stroke="#2E7D32" strokeWidth="5" />
-            <circle cx="100" cy="105" r="20" stroke="#2E7D32" strokeWidth="5" />
-            <path d="M100 75 L 100 85" stroke="#2E7D32" strokeWidth="5" strokeLinecap="round" />
-            <path d="M85 90 L 115 90" stroke="#2E7D32" strokeWidth="5" strokeLinecap="round" />
-            <path d="M125 125 L 140 140" stroke="#2E7D32" strokeWidth="5" strokeLinecap="round" />
-          </svg>
-          <h3 className="text-lg font-black text-text-dark mt-4">
-            No expenses logged yet
-          </h3>
-          <p className="text-xs text-gray-400 font-semibold mt-1.5 text-center leading-normal">
-            Keep track of fuel, seeds, fertilizer and tractor rents by adding a new expense.
-          </p>
-          <button
-            onClick={() => setShowModal(true)}
-            className="mt-6 px-6 py-3.5 bg-primary text-white font-bold rounded-2xl shadow-soft btn-active-scale cursor-pointer flex items-center gap-1.5 text-sm"
-          >
-            <Plus size={16} />
-            {t('addExpense', lang)}
-          </button>
+          <Layers size={40} className="text-gray-300 mb-2" />
+          <h3 className="text-lg font-black text-text-dark mt-2">No expenses recorded.</h3>
+          <p className="text-xs text-gray-400 text-center mt-1">Keep track of farm bills by logging a new expense.</p>
         </div>
       ) : (
-        <div className="space-y-3 flex-1">
+        <div className="space-y-3.5 flex-1">
           {filteredExpenses.map(e => {
-            // Map other categories back to Others for local display styling
-            let catKey = e.category;
-            if (e.category === 'Labor' || e.category === 'Equipment') {
-              catKey = 'Others';
-            }
-            const theme = getCategoryDetails(catKey);
+            const theme = getCategoryDetails(e.category);
             return (
               <motion.div
                 key={e.id}
                 layout
-                className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft flex items-center justify-between"
+                className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft flex flex-col justify-between"
               >
-                <div className="flex items-center gap-3">
-                  <div className={`w-12 h-12 rounded-2xl ${theme.bg} shrink-0 flex items-center justify-center text-xl`}>
-                    {theme.emoji}
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className={`w-12 h-12 rounded-2xl ${theme.bg} shrink-0 flex items-center justify-center text-xl`}>
+                      {theme.emoji}
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-bold text-text-dark leading-tight truncate">
+                        {e.description}
+                      </h3>
+                      <span className="text-[9px] text-gray-400 font-extrabold uppercase tracking-wider block mt-1">
+                        {t(e.category, lang).split(' / ')[0]}
+                      </span>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="text-sm font-bold text-text-dark leading-tight">
-                      {e.description}
-                    </h3>
-                    <span className="text-[9px] text-gray-400 font-extrabold uppercase tracking-wider block mt-1">
-                      {t(catKey, lang).split(' / ')[0]}
+
+                  <div className="text-right shrink-0">
+                    <span className="text-base font-extrabold text-danger-red block">
+                      - ₹{e.amount}
+                    </span>
+                    <span className="text-[9px] text-gray-400 font-semibold mt-1 block">
+                      {e.date}
                     </span>
                   </div>
                 </div>
 
-                <div className="text-right shrink-0">
-                  <span className="text-base font-extrabold text-danger-red block">
-                    - ₹{e.amount}
-                  </span>
-                  <span className="text-[9px] text-gray-400 font-semibold mt-1 block">
-                    {e.date}
-                  </span>
+                {e.notes && (
+                  <div className="bg-[#F8F5E9]/50 border border-[#E0DBC5]/30 rounded-xl p-2.5 mt-3.5 text-xs text-gray-500 font-medium flex gap-1.5">
+                    <FileText size={14} className="text-accent shrink-0 mt-0.5" />
+                    <span className="italic leading-snug">{e.notes}</span>
+                  </div>
+                )}
+
+                {/* Edit / Delete actions row */}
+                <div className="flex gap-2 justify-end mt-3.5 pt-3 border-t border-gray-50">
+                  <button
+                    onClick={() => openEditModal(e)}
+                    className="p-2 bg-primary/10 text-primary rounded-xl active:scale-90 flex items-center gap-1 text-[10px] font-bold"
+                  >
+                    <Edit2 size={12} />
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => handleDelete(e.id, e.amount, e.description)}
+                    className="p-2 bg-danger-red/10 text-danger-red rounded-xl active:scale-90 flex items-center gap-1 text-[10px] font-bold"
+                  >
+                    <Trash2 size={12} />
+                    Delete
+                  </button>
                 </div>
               </motion.div>
             );
@@ -274,7 +406,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
 
       {/* Add Expense Drawer Sheet */}
       <AnimatePresence>
-        {showModal && (
+        {showAddModal && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end justify-center p-4">
             <motion.div
               initial={{ y: "100%" }}
@@ -284,7 +416,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
               className="bg-white w-full max-w-md rounded-t-3xl p-6 shadow-premium relative border-t border-[#E0DBC5] max-h-[90vh] overflow-y-auto"
             >
               <button 
-                onClick={() => setShowModal(false)}
+                onClick={() => setShowAddModal(false)}
                 className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
               >
                 <X size={18} />
@@ -294,42 +426,29 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
                 {t('addExpense', lang)}
               </h3>
 
-              <form onSubmit={handleSave} className="space-y-4">
-                {/* Category Card Selection Grid */}
-                <div className="flex flex-col gap-1.5">
+              <form onSubmit={handleCreate} className="space-y-4">
+                {/* Category selection */}
+                <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
-                    {t('category', lang)}
+                    Category
                   </label>
-                  
-                  <div className="grid grid-cols-3 gap-2.5">
-                    {categoriesList.map(cat => {
-                      const isSelected = category === cat;
-                      const theme = getCategoryDetails(cat);
-                      return (
-                        <button
-                          key={cat}
-                          type="button"
-                          onClick={() => setCategory(cat)}
-                          className={`p-3 rounded-2xl border text-center transition-all flex flex-col items-center justify-center gap-1 active:scale-95 cursor-pointer ${
-                            isSelected 
-                              ? 'bg-primary text-white border-primary shadow-soft' 
-                              : 'bg-white text-gray-700 border-[#E0DBC5]/60 hover:bg-[#F8F5E9]/20'
-                          }`}
-                        >
-                          <span className="text-2xl block">{theme.emoji}</span>
-                          <span className="text-[10px] font-bold tracking-tight block">
-                            {t(cat, lang).split(' / ')[0]}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value as Expense['category'])}
+                    className="form-input bg-white"
+                  >
+                    {categoriesList.map(cat => (
+                      <option key={cat} value={cat}>
+                        {getCategoryDetails(cat).emoji} {t(cat, lang).split(' / ')[0]}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Amount */}
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
-                    {t('amount', lang)}
+                    Amount (₹)
                   </label>
                   <input
                     type="number"
@@ -344,37 +463,22 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
                 {/* Description */}
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
-                    {t('description', lang)}
+                    Description
                   </label>
                   <input
                     type="text"
                     required
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder="e.g. Tractor fuel or Paddy seeds"
+                    placeholder="e.g. Tractor fuel or Urea bags"
                     className="form-input"
                   />
-                  {/* Suggestions */}
-                  <div className="flex gap-2 mt-2 pl-1">
-                    <span
-                      onClick={() => setDescription("Tractor fuel")}
-                      className="text-[10px] bg-[#F8F5E9] text-primary px-2.5 py-1 rounded-lg border border-[#E0DBC5] font-semibold cursor-pointer active:scale-95 transition-all"
-                    >
-                      Tractor Fuel
-                    </span>
-                    <span
-                      onClick={() => setDescription("Seeds purchase")}
-                      className="text-[10px] bg-[#F8F5E9] text-primary px-2.5 py-1 rounded-lg border border-[#E0DBC5] font-semibold cursor-pointer active:scale-95 transition-all"
-                    >
-                      Seeds
-                    </span>
-                  </div>
                 </div>
 
                 {/* Date */}
                 <div className="flex flex-col gap-1">
                   <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
-                    {t('expenseDate', lang)}
+                    Date
                   </label>
                   <input
                     type="date"
@@ -385,19 +489,33 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
                   />
                 </div>
 
+                {/* Notes */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
+                    Notes (Optional)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="e.g. Purchased from local dealer in village"
+                    className="form-input resize-none"
+                  />
+                </div>
+
                 {/* Save Buttons */}
                 <div className="flex gap-3 pt-4">
                   <button
                     type="button"
-                    onClick={() => setShowModal(false)}
-                    className="flex-1 py-4 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 text-sm transition-all cursor-pointer"
+                    onClick={() => setShowAddModal(false)}
+                    className="flex-1 py-4 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 text-sm transition-all"
                   >
                     {t('cancel', lang)}
                   </button>
                   <button
                     type="submit"
                     disabled={saving}
-                    className="flex-1 py-4 bg-primary text-white font-bold rounded-2xl active:scale-95 shadow-soft text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                    className="flex-1 py-4 bg-primary text-white font-bold rounded-2xl active:scale-95 shadow-soft text-sm transition-all flex items-center justify-center gap-1.5"
                   >
                     {saving ? (
                       <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -405,6 +523,135 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
                       <>
                         <Check size={15} />
                         {t('save', lang)}
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Expense Drawer Sheet */}
+      <AnimatePresence>
+        {showEditModal && editingExpenseObj && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end justify-center p-4">
+            <motion.div
+              initial={{ y: "100%" }}
+              animate={{ y: 0 }}
+              exit={{ y: "100%" }}
+              transition={{ type: 'spring', damping: 25, stiffness: 350 }}
+              className="bg-white w-full max-w-md rounded-t-3xl p-6 shadow-premium relative border-t border-[#E0DBC5] max-h-[90vh] overflow-y-auto"
+            >
+              <button 
+                onClick={() => setShowEditModal(false)}
+                className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-xl font-bold text-text-dark mb-4">
+                Edit Expense Details
+              </h3>
+
+              <form onSubmit={handleUpdate} className="space-y-4">
+                {/* Category selection */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
+                    Category
+                  </label>
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value as Expense['category'])}
+                    className="form-input bg-white"
+                  >
+                    {categoriesList.map(cat => (
+                      <option key={cat} value={cat}>
+                        {getCategoryDetails(cat).emoji} {t(cat, lang).split(' / ')[0]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Amount */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
+                    Amount (₹)
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="e.g. 1500"
+                    className="form-input"
+                  />
+                </div>
+
+                {/* Description */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
+                    Description
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="e.g. Tractor fuel or Urea bags"
+                    className="form-input"
+                  />
+                </div>
+
+                {/* Date */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
+                    Date
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    className="form-input"
+                  />
+                </div>
+
+                {/* Notes */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">
+                    Notes
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="e.g. Purchased from local dealer in village"
+                    className="form-input resize-none"
+                  />
+                </div>
+
+                {/* Save Buttons */}
+                <div className="flex gap-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowEditModal(false)}
+                    className="flex-1 py-4 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 text-sm transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="flex-1 py-4 bg-primary text-white font-bold rounded-2xl active:scale-95 shadow-soft text-sm transition-all flex items-center justify-center gap-1.5"
+                  >
+                    {saving ? (
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <>
+                        <Check size={15} />
+                        Update Details
                       </>
                     )}
                   </button>

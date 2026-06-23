@@ -12,7 +12,7 @@ export const translations = {
     profile: 'Profile',
 
     // Dashboard
-    title: 'Pramesh AgriBook',
+    title: 'Paramesh AgriBook',
     tagline: 'Smart Farm Ledger for Workers & Expenses',
     todaysWorkers: "Today's Workers",
     presentWorkers: 'Present Workers',
@@ -151,7 +151,7 @@ export const translations = {
     profile: 'ప్రొఫైల్',
 
     // Dashboard
-    title: 'ప్రమేష్ అగ్రిబుక్',
+    title: 'పరమేష్ అగ్రిబుక్',
     tagline: 'పనివారు, కూలీలు మరియు ఖర్చుల స్మార్ట్ డైరీ',
     todaysWorkers: 'ఈరోజు పనివారు',
     presentWorkers: 'హాజరైన పనివారు',
@@ -285,8 +285,8 @@ export const translations = {
     cloudBackupOffline: 'Offline Demo Ledger (No sync)',
     appVersionLabel: 'App Version',
     aboutLabel: 'About AgriBook',
-    aboutText: 'Pramesh AgriBook is a smart farm account book. It makes tracking workers, daily attendance, payments, and farm expenses easy, with automated insights and weekly reporting.',
-    aboutTextTe: 'ప్రమేష్ అగ్రిబుక్ అనేది వ్యవసాయదారుల కోసం తయారుచేసిన ఒక స్మార్ట్ డైరీ. దీని ద్వారా పనివారి హాజరు, కూలీలు మరియు ఖర్చుల లెక్కలను సులభంగా రికార్డ్ చేసుకోవచ్చు.',
+    aboutText: 'Paramesh AgriBook is a smart farm account book. It makes tracking workers, daily attendance, payments, and farm expenses easy, with automated insights and weekly reporting.',
+    aboutTextTe: 'పరమేష్ అగ్రిబుక్ అనేది వ్యవసాయదారుల కోసం తయారుచేసిన ఒక స్మార్ట్ డైరీ. దీని ద్వారా పనివారి హాజరు, కూలీలు మరియు ఖర్చుల లెక్కలను సులభంగా రికార్డ్ చేసుకోవచ్చు.',
   }
 };
 

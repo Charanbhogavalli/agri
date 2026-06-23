@@ -19,24 +19,24 @@ export interface WeeklyReportData {
 
 // Helper to get Resend config from settings
 export const getResendConfig = () => {
-  const saved = localStorage.getItem('pramesh_settings');
+  const saved = localStorage.getItem('paramesh_settings');
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
       return {
         apiKey: parsed.resendKey || import.meta.env.VITE_RESEND_API_KEY || '',
-        fatherEmail: parsed.fatherEmail || 'father@example.com',
-        familyEmail: parsed.familyEmail || 'family@example.com',
-        adminEmail: parsed.adminEmail || 'admin@example.com',
+        fatherEmail: parsed.fatherEmail || '',
+        familyEmail: parsed.familyEmail || '',
+        adminEmail: parsed.adminEmail || '',
         senderEmail: parsed.senderEmail || 'onboarding@resend.dev'
       };
     } catch (e) {}
   }
   return {
     apiKey: import.meta.env.VITE_RESEND_API_KEY || '',
-    fatherEmail: 'father@example.com',
-    familyEmail: 'family@example.com',
-    adminEmail: 'admin@example.com',
+    fatherEmail: '',
+    familyEmail: '',
+    adminEmail: '',
     senderEmail: 'onboarding@resend.dev'
   };
 };
@@ -70,8 +70,13 @@ export const calculateWeeklyReport = (
   // Compile worker details
   let totalLaborCost = 0;
   const workerSummaries = workers.map(w => {
-    // Count days worked
-    const daysWorked = weekAttendance.filter(a => a.workerId === w.id && a.status === 'present').length;
+    // Count days worked incorporating half_day weight
+    const workerAtt = weekAttendance.filter(a => a.workerId === w.id);
+    const daysWorked = workerAtt.reduce((sum, a) => {
+      if (a.status === 'present') return sum + 1;
+      if (a.status === 'half_day') return sum + 0.5;
+      return sum;
+    }, 0);
     const totalEarned = daysWorked * w.dailyWage;
     totalLaborCost += totalEarned;
 
@@ -274,7 +279,7 @@ const generateEmailHtml = (data: WeeklyReportData): string => {
             <td>
               <div class="container">
                 <div class="header">
-                  <h1>🌾 Pramesh AgriBook</h1>
+                  <h1>🌾 Paramesh AgriBook</h1>
                   <p>Weekly Farm Report (${data.weekRange})</p>
                 </div>
                 <div class="content">
@@ -322,8 +327,8 @@ const generateEmailHtml = (data: WeeklyReportData): string => {
 
                 </div>
                 <div class="footer">
-                  This report was compiled and sent from the Pramesh AgriBook Ledger.<br>
-                  © 2026 Pramesh AgriBook. All rights reserved.
+                  This report was compiled and sent from the Paramesh AgriBook Ledger.<br>
+                  © 2026 Paramesh AgriBook. All rights reserved.
                 </div>
               </div>
             </td>
@@ -352,7 +357,7 @@ export const sendWeeklyReport = async (
   }
 
   // Create local logging of weekly email sent (so they can verify locally)
-  const loggedEmails = JSON.parse(localStorage.getItem('pramesh_weekly_emails') || '[]');
+  const loggedEmails = JSON.parse(localStorage.getItem('paramesh_weekly_emails') || '[]');
   const newLog = {
     date: new Date().toISOString(),
     weekRange: reportData.weekRange,
@@ -366,7 +371,7 @@ export const sendWeeklyReport = async (
     console.log("No Resend API Key. Simulation mode enabled. Compiled HTML:\n", html);
     newLog.success = true;
     loggedEmails.push(newLog);
-    localStorage.setItem('pramesh_weekly_emails', JSON.stringify(loggedEmails));
+    localStorage.setItem('paramesh_weekly_emails', JSON.stringify(loggedEmails));
     return { 
       success: true, 
       message: 'Weekly report simulated. You can review the email draft in Profile -> Reports Sent.' 
@@ -382,9 +387,9 @@ export const sendWeeklyReport = async (
         'Authorization': `Bearer ${config.apiKey}`
       },
       body: JSON.stringify({
-        from: `Pramesh AgriBook <${config.senderEmail}>`,
+        from: `Paramesh AgriBook <${config.senderEmail}>`,
         to: recipients,
-        subject: `🌾 Pramesh AgriBook: Weekly Farm Report - ${reportData.weekRange}`,
+        subject: `🌾 Paramesh AgriBook: Weekly Farm Report - ${reportData.weekRange}`,
         html: html
       })
     });
@@ -393,7 +398,7 @@ export const sendWeeklyReport = async (
       newLog.success = true;
       newLog.simulated = false;
       loggedEmails.push(newLog);
-      localStorage.setItem('pramesh_weekly_emails', JSON.stringify(loggedEmails));
+      localStorage.setItem('paramesh_weekly_emails', JSON.stringify(loggedEmails));
       return { success: true, message: 'Weekly report email sent successfully!' };
     } else {
       const errText = await response.text();
@@ -425,7 +430,7 @@ export const sendWeeklyReport = async (
     }
 
     loggedEmails.push(newLog);
-    localStorage.setItem('pramesh_weekly_emails', JSON.stringify(loggedEmails));
+    localStorage.setItem('paramesh_weekly_emails', JSON.stringify(loggedEmails));
     return { 
       success: false, 
       message: userFriendlyMessage 

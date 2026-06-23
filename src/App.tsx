@@ -15,12 +15,14 @@ import {
   Sparkles
 } from 'lucide-react';
 import { 
-  getMockCurrentUser, 
-  mockSignIn, 
+  signInWithGoogle,
+  signInWithEmail,
+  subscribeToAuthChanges,
   AppUser, 
   isMockMode,
   fetchWorkers,
   fetchPayments,
+  fetchAttendance,
   AttendanceRecord
 } from './firebase';
 import { t, subT, Language } from './utils/translation';
@@ -56,18 +58,19 @@ export default function App() {
   // Load preferences from local storage on mount
   useEffect(() => {
     // 1. Language
-    const savedLang = localStorage.getItem('pramesh_lang') as Language;
+    const savedLang = localStorage.getItem('paramesh_lang') as Language;
     if (savedLang) setLang(savedLang);
 
     // 2. Bilingual
-    const savedBilingual = localStorage.getItem('pramesh_bilingual');
+    const savedBilingual = localStorage.getItem('paramesh_bilingual');
     if (savedBilingual !== null) setBilingual(savedBilingual === 'true');
 
     // 3. User Session
-    const user = getMockCurrentUser();
-    if (user) {
+    const unsubscribe = subscribeToAuthChanges((user) => {
       setCurrentUser(user);
-    }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Update pending wages count whenever database changes or view swaps
@@ -81,11 +84,16 @@ export default function App() {
     try {
       const workersData = await fetchWorkers();
       const paymentsData = await fetchPayments();
-      const allAttendance: AttendanceRecord[] = JSON.parse(localStorage.getItem('pramesh_attendance') || '[]');
+      const allAttendance = await fetchAttendance();
 
       let count = 0;
       workersData.forEach(w => {
-        const days = allAttendance.filter(a => a.workerId === w.id && a.status === 'present').length;
+        const workerAtt = allAttendance.filter(a => a.workerId === w.id);
+        const days = workerAtt.reduce((sum, a) => {
+          if (a.status === 'present') return sum + 1;
+          if (a.status === 'half_day') return sum + 0.5;
+          return sum;
+        }, 0);
         const earned = days * w.dailyWage;
         const paid = paymentsData.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
         if (earned - paid > 0) {
@@ -100,12 +108,12 @@ export default function App() {
 
   const handleLanguageChange = (newLang: Language) => {
     setLang(newLang);
-    localStorage.setItem('pramesh_lang', newLang);
+    localStorage.setItem('paramesh_lang', newLang);
   };
 
   const handleBilingualChange = (val: boolean) => {
     setBilingual(val);
-    localStorage.setItem('pramesh_bilingual', String(val));
+    localStorage.setItem('paramesh_bilingual', String(val));
   };
 
   const showToast = (message: string, type: 'success' | 'error') => {
@@ -132,7 +140,7 @@ export default function App() {
 
     setAuthLoading(true);
     try {
-      const user = await mockSignIn(email.trim(), false);
+      const user = await signInWithEmail(email.trim(), password.trim());
       setCurrentUser(user);
       showToast("Logged in successfully!", "success");
     } catch (err) {
@@ -145,24 +153,11 @@ export default function App() {
   const handleGoogleLogin = async () => {
     setAuthLoading(true);
     try {
-      const user = await mockSignIn('pramesh@agribook.com', true);
+      const user = await signInWithGoogle();
       setCurrentUser(user);
       showToast("Logged in with Google!", "success");
     } catch (err) {
       showToast(t('loginError', lang), "error");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  const handleSkipAuth = async () => {
-    setAuthLoading(true);
-    try {
-      const user = await mockSignIn('demo@agribook.com', false);
-      setCurrentUser(user);
-      showToast("Logged in as Demo Farmer", "success");
-    } catch (err) {
-      showToast("Auth failed", "error");
     } finally {
       setAuthLoading(false);
     }
@@ -251,6 +246,10 @@ export default function App() {
             onLanguageChange={handleLanguageChange}
             onBilingualChange={handleBilingualChange}
             onLogout={() => {
+              localStorage.removeItem('paramesh_mock_user');
+              localStorage.removeItem('paramesh_settings');
+              setEmail('');
+              setPassword('');
               setCurrentUser(null);
               setCurrentView('home');
             }}
@@ -316,7 +315,7 @@ export default function App() {
                 <Sprout size={48} className="fill-primary/5" />
               </div>
               <h1 className="text-3xl font-black text-text-dark tracking-tight leading-none">
-                🌾 Pramesh AgriBook
+                🌾 Paramesh AgriBook
               </h1>
               <p className="text-[10px] text-gray-400 font-extrabold uppercase tracking-widest mt-2.5">
                 Smart Farm Ledger
@@ -387,7 +386,7 @@ export default function App() {
                 <div className="h-[1px] bg-gray-100 flex-1"></div>
               </div>
 
-              {/* Google Login & Demo shortcut */}
+              {/* Google Login */}
               <div className="space-y-2.5">
                 <button
                   onClick={handleGoogleLogin}
@@ -401,15 +400,6 @@ export default function App() {
                     <path fill="#34A853" d="M12 23c3.24 0 5.97-1.07 7.96-2.91l-3.87-3c-1.1.74-2.51 1.18-4.09 1.18-3.11 0-5.77-2.36-6.7-5.39l-3.87 3C3.4 20.37 7.37 23 12 23z"/>
                   </svg>
                   {t('googleLogin', lang)}
-                </button>
-
-                <button
-                  onClick={handleSkipAuth}
-                  disabled={authLoading}
-                  className="w-full py-3.5 bg-accent text-white font-bold rounded-2xl active:scale-98 shadow-sm cursor-pointer flex items-center justify-center gap-1.5 text-sm transition-all"
-                >
-                  <Sparkles size={16} />
-                  Demo Mode (Skip Setup)
                 </button>
               </div>
             </div>
@@ -442,14 +432,14 @@ export default function App() {
             className="flex-1 flex flex-col justify-between min-h-screen relative"
           >
             {/* Header */}
-            <header className="sticky top-0 left-0 right-0 z-40 glass-header px-4 py-3.5 flex items-center justify-between">
+            <header className="sticky top-0 left-0 right-0 z-50 glass-header px-4 py-3.5 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-primary/10 text-primary rounded-xl flex items-center justify-center">
                   <Sprout size={18} />
                 </div>
                 <div>
                   <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider block">
-                    Pramesh AgriBook
+                    Paramesh AgriBook
                   </span>
                   <span className="text-sm font-extrabold text-text-dark block leading-none">
                     {bilingual 

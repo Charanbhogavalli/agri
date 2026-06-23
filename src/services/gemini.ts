@@ -1,9 +1,9 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { Worker, Expense, Payment } from '../firebase';
+import { Worker, Expense, Payment, AttendanceRecord } from '../firebase';
 
 // Helper to get Gemini API key
 export const getGeminiApiKey = (): string => {
-  const saved = localStorage.getItem('pramesh_settings');
+  const saved = localStorage.getItem('paramesh_settings');
   if (saved) {
     try {
       const parsed = JSON.parse(saved);
@@ -111,7 +111,7 @@ export const parseNaturalLanguage = async (
     const systemPrompt = `You are a smart parser for a farm ledger app. 
 Parse the user's text and extract transaction details.
 Today is Tuesday, June 23, 2026.
-
+ 
 Available Workers in system: [${workersInfo}]
 Allowed Expense Categories: [Labor, Seeds, Fertilizer, Diesel, Tractor, Transport, Equipment, Others]
 
@@ -151,29 +151,42 @@ Parse the text: "${text}"`;
 };
 
 // ----------------------------------------------------
-// 2. Smart AI Observations Generator
+// 2. Smart Programmatic Insights Generator
 // ----------------------------------------------------
 export interface AIObservation {
   textEn: string;
   textTe: string;
 }
 
-// Local analytics parser to generate smart insights locally if no API key is provided
-const generateMockObservations = (
+const getPreviousMonthStr = (currentMonthStr: string): string => {
+  const [yearStr, monthStr] = currentMonthStr.split('-');
+  let year = parseInt(yearStr, 10);
+  let month = parseInt(monthStr, 10);
+  month -= 1;
+  if (month === 0) {
+    month = 12;
+    year -= 1;
+  }
+  return `${year}-${String(month).padStart(2, '0')}`;
+};
+
+export const getInsightsList = (
   workers: Worker[],
   expenses: Expense[],
-  payments: Payment[]
+  payments: Payment[],
+  attendance: AttendanceRecord[],
+  currentMonthStr: string
 ): AIObservation[] => {
   const insights: AIObservation[] = [];
 
-  // Calculate stats
-  const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
-  const totalPayments = payments.reduce((sum, p) => sum + p.amount, 0);
+  const curMonthPayments = payments.filter(p => p.date.startsWith(currentMonthStr));
+  const curMonthExpenses = expenses.filter(e => e.date.startsWith(currentMonthStr));
+  const curMonthAttendance = attendance.filter(a => a.date.startsWith(currentMonthStr));
 
-  // 1. Highest paid worker
-  if (payments.length > 0 && workers.length > 0) {
+  // 1. Top Paid Worker (this month)
+  if (curMonthPayments.length > 0 && workers.length > 0) {
     const payMap: Record<string, number> = {};
-    payments.forEach(p => {
+    curMonthPayments.forEach(p => {
       payMap[p.workerId] = (payMap[p.workerId] || 0) + p.amount;
     });
     let maxPay = 0;
@@ -193,10 +206,58 @@ const generateMockObservations = (
     }
   }
 
-  // 2. Highest expense category
-  if (expenses.length > 0) {
+  // 2. Most Regular Worker (this month)
+  if (curMonthAttendance.length > 0 && workers.length > 0) {
+    const attMap: Record<string, number> = {};
+    curMonthAttendance.forEach(a => {
+      const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
+      attMap[a.workerId] = (attMap[a.workerId] || 0) + weight;
+    });
+    let maxDays = 0;
+    let regularWorkerId = '';
+    Object.entries(attMap).forEach(([wId, days]) => {
+      if (days > maxDays) {
+        maxDays = days;
+        regularWorkerId = wId;
+      }
+    });
+    const topWorker = workers.find(w => w.id === regularWorkerId);
+    if (topWorker && maxDays > 0) {
+      insights.push({
+        textEn: `${topWorker.name} is the most regular worker this month with ${maxDays} days of work.`,
+        textTe: `ఈ నెలలో ${topWorker.name} అత్యధికంగా ${maxDays} రోజులు పని చేసి అత్యంత క్రమశిక్షణ గల కూలీగా నిలిచారు.`
+      });
+    }
+  }
+
+  // 3. Pending Wages (all-time)
+  if (workers.length > 0) {
+    let totalPending = 0;
+    workers.forEach(w => {
+      const workerAtt = attendance.filter(a => a.workerId === w.id);
+      const earned = workerAtt.reduce((sum, a) => {
+        if (a.status === 'present') return sum + w.dailyWage;
+        if (a.status === 'half_day') return sum + w.dailyWage * 0.5;
+        return sum;
+      }, 0);
+      const paid = payments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
+      const pending = earned - paid;
+      if (pending > 0) {
+        totalPending += pending;
+      }
+    });
+    if (totalPending > 0) {
+      insights.push({
+        textEn: `Total outstanding wages across all workers is ₹${totalPending}.`,
+        textTe: `కూలీలందరికీ కలిపి మొత్తం బకాయి కూలి ₹${totalPending} గా ఉంది.`
+      });
+    }
+  }
+
+  // 4. Biggest Expense Category (this month)
+  if (curMonthExpenses.length > 0) {
     const expMap: Record<string, number> = {};
-    expenses.forEach(e => {
+    curMonthExpenses.forEach(e => {
       expMap[e.category] = (expMap[e.category] || 0) + e.amount;
     });
     let maxExp = 0;
@@ -207,35 +268,84 @@ const generateMockObservations = (
         maxCat = cat;
       }
     });
-    
-    // Translate category to Telugu
     const categoryTeMap: Record<string, string> = {
-      Labor: 'కూలీల ఖర్చులు', Seeds: 'విత్తనాలు', Fertilizer: 'ఎరువులు', 
+      Labor: 'కూలీల ఖర్చులు', Seeds: 'విత్తనాలు', Fertilizer: 'エరువులు', 
       Diesel: 'డీజిల్ / ఆయిల్', Tractor: 'ట్రాక్టర్ అద్దె', Transport: 'రవాణా', 
       Equipment: 'పనిముట్లు', Others: 'ఇతర ఖర్చులు'
     };
-    
-    insights.push({
-      textEn: `${maxCat} is the highest expense category at ₹${maxExp}.`,
-      textTe: `అత్యధిక ఖర్చు చేసిన కేటగిరీ ₹${maxExp} తో "${categoryTeMap[maxCat] || maxCat}" గా ఉంది.`
-    });
-
-    // 3. Labor percentage
-    const laborExp = expMap['Labor'] || 0;
-    const combinedSpending = totalExpenses + totalPayments; // Labor wages in payments + general expenses
-    if (combinedSpending > 0) {
-      const wageSum = totalPayments + laborExp;
-      const wagePct = Math.round((wageSum / combinedSpending) * 100);
-      if (wagePct > 0) {
-        insights.push({
-          textEn: `Labor and wages account for ${wagePct}% of total farm spending.`,
-          textTe: `మొత్తం వ్యవసాయ ఖర్చులలో కూలీలు మరియు వేతనాలు ${wagePct}% గా ఉన్నాయి.`
-        });
-      }
+    if (maxCat) {
+      insights.push({
+        textEn: `Biggest expense category this month is ${maxCat} (₹${maxExp}).`,
+        textTe: `ఈ నెలలో అత్యధిక ఖర్చు చేసిన కేటగిరీ "${categoryTeMap[maxCat] || maxCat}" (₹${maxExp}).`
+      });
     }
   }
 
-  // 4. Default insights if not enough data
+  // 5. Top 5 Workers by Attendance (this month)
+  if (curMonthAttendance.length > 0 && workers.length > 0) {
+    const attMap: Record<string, number> = {};
+    curMonthAttendance.forEach(a => {
+      const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
+      attMap[a.workerId] = (attMap[a.workerId] || 0) + weight;
+    });
+    const sortedWorkers = Object.entries(attMap)
+      .map(([wId, days]) => ({
+        worker: workers.find(w => w.id === wId),
+        days
+      }))
+      .filter(item => item.worker && item.days > 0)
+      .sort((a, b) => b.days - a.days)
+      .slice(0, 5);
+
+    if (sortedWorkers.length > 0) {
+      const namesEn = sortedWorkers.map(item => `${item.worker?.name} (${item.days}d)`).join(', ');
+      const namesTe = sortedWorkers.map(item => `${item.worker?.name} (${item.days} రోజులు)`).join(', ');
+      insights.push({
+        textEn: `Top active workers this month: ${namesEn}.`,
+        textTe: `ఈ నెలలో ఎక్కువ రోజులు పనిచేసిన కూలీలు: ${namesTe}.`
+      });
+    }
+  }
+
+  // 6. Monthly Trend (Total Spending)
+  const curMonthLaborCost = curMonthAttendance.reduce((sum, a) => {
+    const worker = workers.find(w => w.id === a.workerId);
+    if (!worker) return sum;
+    const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
+    return sum + (weight * worker.dailyWage);
+  }, 0);
+  const curMonthExpensesTotal = curMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const curMonthTotalSpending = curMonthLaborCost + curMonthExpensesTotal;
+
+  const prevMonthStr = getPreviousMonthStr(currentMonthStr);
+  const prevMonthAttendance = attendance.filter(a => a.date.startsWith(prevMonthStr));
+  const prevMonthExpenses = expenses.filter(e => e.date.startsWith(prevMonthStr));
+
+  const prevMonthLaborCost = prevMonthAttendance.reduce((sum, a) => {
+    const worker = workers.find(w => w.id === a.workerId);
+    if (!worker) return sum;
+    const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
+    return sum + (weight * worker.dailyWage);
+  }, 0);
+  const prevMonthExpensesTotal = prevMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const prevMonthTotalSpending = prevMonthLaborCost + prevMonthExpensesTotal;
+
+  if (prevMonthTotalSpending > 0) {
+    const percentDiff = Math.round(((curMonthTotalSpending - prevMonthTotalSpending) / prevMonthTotalSpending) * 100);
+    const trendWordEn = percentDiff >= 0 ? 'increased by' : 'decreased by';
+    const trendWordTe = percentDiff >= 0 ? 'పెరిగింది' : 'తగ్గింది';
+    insights.push({
+      textEn: `Total spending this month (₹${curMonthTotalSpending}) has ${trendWordEn} ${Math.abs(percentDiff)}% compared to last month (₹${prevMonthTotalSpending}).`,
+      textTe: `గత నెలతో (₹${prevMonthTotalSpending}) పోలిస్తే ఈ నెల మొత్తం ఖర్చు (₹${curMonthTotalSpending}) ${Math.abs(percentDiff)}% ${trendWordTe}.`
+    });
+  } else if (curMonthTotalSpending > 0) {
+    insights.push({
+      textEn: `Logged ₹${curMonthTotalSpending} in total spending this month. Keep updating to see monthly trends.`,
+      textTe: `ఈ నెలలో మొత్తం ₹${curMonthTotalSpending} ఖర్చు నమోదైంది. నెలవారీ మార్పులను చూడటానికి ఖర్చులను నమోదు చేస్తూ ఉండండి.`
+    });
+  }
+
+  // 7. Default fallbacks if there are less than 3 insights
   if (insights.length < 3) {
     insights.push({
       textEn: "Tip: Add daily attendance regularly to generate accurate weekly wage calculations automatically.",
@@ -250,60 +360,11 @@ const generateMockObservations = (
   return insights;
 };
 
+// Deprecated in favor of programmatic getInsightsList, kept for signature compatibility
 export const generateAIObservations = async (
   workers: Worker[],
   expenses: Expense[],
   payments: Payment[]
 ): Promise<AIObservation[]> => {
-  const apiKey = getGeminiApiKey();
-
-  if (!apiKey) {
-    console.log("No Gemini API key. Generating smart observations locally.");
-    return generateMockObservations(workers, expenses, payments);
-  }
-
-  try {
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-1.5-flash',
-      generationConfig: { responseMimeType: 'application/json' }
-    });
-
-    const dataSummary = {
-      workersCount: workers.length,
-      workersList: workers.map(w => ({ name: w.name, wage: w.dailyWage, status: w.status })),
-      expensesSummary: expenses.map(e => ({ category: e.category, amount: e.amount, date: e.date, desc: e.description })),
-      paymentsSummary: payments.map(p => {
-        const worker = workers.find(w => w.id === p.workerId);
-        return { workerName: worker?.name || 'Unknown', amount: p.amount, date: p.date };
-      })
-    };
-
-    const systemPrompt = `You are a smart farming assistant analyzing a farm ledger's monthly logs.
-Generate exactly 4 simple, direct, and practical observations based on the current farm records. 
-Create observations that are helpful for a farmer. Keep them concise.
-
-Current Farm Records JSON:
-${JSON.stringify(dataSummary, null, 2)}
-
-For each observation, provide:
-1. The text in plain, simple English (textEn).
-2. The text translated into simple, natural, conversational Telugu script (textTe). Avoid heavy literal translation; write it how a Telugu farmer speaks.
-
-Return JSON in this EXACT schema:
-[
-  {
-    "textEn": "Ramesh received the highest payment of ₹5000 this month.",
-    "textTe": "ఈ నెలలో రమేష్ అత్యధికంగా ₹5000 చెల్లింపును అందుకున్నారు."
-  },
-  ...
-]`;
-
-    const result = await model.generateContent(systemPrompt);
-    const responseText = result.response.text();
-    return JSON.parse(responseText) as AIObservation[];
-  } catch (error) {
-    console.error("Gemini AI Observations error, falling back to mock:", error);
-    return generateMockObservations(workers, expenses, payments);
-  }
+  return getInsightsList(workers, expenses, payments, [], '2026-06');
 };

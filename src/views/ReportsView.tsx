@@ -31,7 +31,8 @@ import {
   AttendanceRecord,
   fetchWorkers,
   fetchExpenses,
-  fetchPayments 
+  fetchPayments,
+  fetchAttendance
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import * as XLSX from 'xlsx';
@@ -51,6 +52,13 @@ interface ReportsViewProps {
   showToast: (message: string, type: 'success' | 'error') => void;
 }
 
+const getLocalDateString = (d: Date = new Date()) => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 export const ReportsView: React.FC<ReportsViewProps> = ({
   lang,
   bilingual,
@@ -63,6 +71,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'charts' | 'rankings' | 'data'>('charts');
 
+  // Filter States
+  const [reportType, setReportType] = useState<string>('all'); // all, worker, payment, expense, attendance
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [searchQuery, setSearchQuery] = useState<string>('');
+
   useEffect(() => {
     loadData();
   }, []);
@@ -73,7 +87,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       const wData = await fetchWorkers();
       const eData = await fetchExpenses();
       const pData = await fetchPayments();
-      const aData = JSON.parse(localStorage.getItem('pramesh_attendance') || '[]');
+      const aData = await fetchAttendance();
 
       setWorkers(wData);
       setExpenses(eData);
@@ -86,11 +100,55 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     }
   };
 
-  // Compile calculations (June 2026)
+  const q = searchQuery.toLowerCase().trim();
+
+  // Filtered attendance
+  const filteredAttendance = attendance.filter(a => {
+    if (startDate && a.date < startDate) return false;
+    if (endDate && a.date > endDate) return false;
+    if (q) {
+      const worker = workers.find(w => w.id === a.workerId);
+      if (!worker || !worker.name.toLowerCase().includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Filtered payments
+  const filteredPayments = payments.filter(p => {
+    if (startDate && p.date < startDate) return false;
+    if (endDate && p.date > endDate) return false;
+    if (q) {
+      const worker = workers.find(w => w.id === p.workerId);
+      const nameMatch = worker && worker.name.toLowerCase().includes(q);
+      const noteMatch = p.note && p.note.toLowerCase().includes(q);
+      if (!nameMatch && !noteMatch) return false;
+    }
+    return true;
+  });
+
+  // Filtered expenses
+  const filteredExpenses = expenses.filter(e => {
+    if (startDate && e.date < startDate) return false;
+    if (endDate && e.date > endDate) return false;
+    if (q) {
+      const catMatch = e.category.toLowerCase().includes(q);
+      const descMatch = e.description && e.description.toLowerCase().includes(q);
+      const notesMatch = e.notes && e.notes.toLowerCase().includes(q);
+      if (!catMatch && !descMatch && !notesMatch) return false;
+    }
+    return true;
+  });
+
+  // Compile calculations incorporating half_day weight
   const workerSummaries = workers.map(w => {
-    const daysWorked = attendance.filter(a => a.workerId === w.id && a.status === 'present').length;
+    const workerAtt = filteredAttendance.filter(a => a.workerId === w.id);
+    const daysWorked = workerAtt.reduce((sum, a) => {
+      if (a.status === 'present') return sum + 1;
+      if (a.status === 'half_day') return sum + 0.5;
+      return sum;
+    }, 0);
     const earned = daysWorked * w.dailyWage;
-    const paid = payments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
+    const paid = filteredPayments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
     const pending = Math.max(0, earned - paid);
     return {
       id: w.id,
@@ -102,15 +160,26 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       paid,
       pending
     };
+  }).filter(s => {
+    // If worker report is selected, only show active ones or matching search
+    if (reportType === 'worker') {
+      if (q) {
+        return s.name.toLowerCase().includes(q);
+      }
+      return s.daysWorked > 0 || s.paid > 0;
+    }
+    return true;
   });
 
   // Sort workers by earnings (Highest first) for rankings
-  const rankedWorkers = [...workerSummaries].sort((a, b) => b.earned - a.earned);
+  const rankedWorkers = [...workerSummaries]
+    .filter(s => s.earned > 0)
+    .sort((a, b) => b.earned - a.earned);
 
   const totalLaborCost = workerSummaries.reduce((sum, s) => sum + s.earned, 0);
   const totalWagesPaid = workerSummaries.reduce((sum, s) => sum + s.paid, 0);
   const totalWagesPending = workerSummaries.reduce((sum, s) => sum + s.pending, 0);
-  const totalOtherExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+  const totalOtherExpenses = filteredExpenses.reduce((sum, e) => sum + e.amount, 0);
   const totalFarmSpending = totalLaborCost + totalOtherExpenses;
 
   // Highlights calculations
@@ -134,8 +203,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
   let biggestExpenseCategory = 'None';
   const categorySummary: Record<string, number> = {};
-  expenses.forEach(e => {
-    // Map Labor and Equipment to Others if they exist in DB
+  filteredExpenses.forEach(e => {
     let catKey = e.category;
     if (e.category === 'Labor' || e.category === 'Equipment') {
       catKey = 'Others';
@@ -164,40 +232,100 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
   const COLORS = ['#2E7D32', '#F9A825', '#E53935', '#0288D1', '#8E24AA', '#546E7A', '#43A047', '#D81B60'];
 
-  // Chart 2: Monthly trend bar chart (June vs previous mock months)
-  const monthlyBarData = [
-    { name: 'Apr 26', Labor: 12000, Expenses: 8500 },
-    { name: 'May 26', Labor: 14500, Expenses: 9200 },
-    { name: 'Jun 26', Labor: totalLaborCost, Expenses: totalOtherExpenses }
-  ];
+  // Chart 2: Monthly trend bar chart (calculated dynamically from actual database entries)
+  const monthlyDataMap: Record<string, { Labor: number; Expenses: number }> = {};
+
+  // Group labor cost by month
+  attendance.forEach(a => {
+    const month = a.date.substring(0, 7); // YYYY-MM
+    if (!monthlyDataMap[month]) {
+      monthlyDataMap[month] = { Labor: 0, Expenses: 0 };
+    }
+    const worker = workers.find(w => w.id === a.workerId);
+    if (worker) {
+      const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
+      monthlyDataMap[month].Labor += weight * worker.dailyWage;
+    }
+  });
+
+  // Group expenses by month
+  expenses.forEach(e => {
+    const month = e.date.substring(0, 7); // YYYY-MM
+    if (!monthlyDataMap[month]) {
+      monthlyDataMap[month] = { Labor: 0, Expenses: 0 };
+    }
+    monthlyDataMap[month].Expenses += e.amount;
+  });
+
+  const monthlyBarData = Object.entries(monthlyDataMap)
+    .map(([month, data]) => ({
+      name: month,
+      Labor: Math.round(data.Labor),
+      Expenses: Math.round(data.Expenses)
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(-6); // Limit to last 6 months
 
   // Excel Export
   const handleExportExcel = () => {
     try {
       const wb = XLSX.utils.book_new();
 
-      const wsWorkersData = workerSummaries.map(s => ({
-        'Worker Name': s.name,
-        'Village': s.village,
-        'Daily Wage Rate (₹)': s.dailyWage,
-        'Days Worked': s.daysWorked,
-        'Total Wages Earned (₹)': s.earned,
-        'Amount Paid (₹)': s.paid,
-        'Pending Wages (₹)': s.pending
-      }));
-      const wsWorkers = XLSX.utils.json_to_sheet(wsWorkersData);
-      XLSX.utils.book_append_sheet(wb, wsWorkers, 'Workers Wage Ledger');
+      if (reportType === 'all' || reportType === 'worker') {
+        const wsWorkersData = workerSummaries.map(s => ({
+          'Worker Name': s.name,
+          'Village': s.village,
+          'Daily Wage Rate (₹)': s.dailyWage,
+          'Days Worked': s.daysWorked,
+          'Total Wages Earned (₹)': s.earned,
+          'Amount Paid (₹)': s.paid,
+          'Pending Wages (₹)': s.pending
+        }));
+        const wsWorkers = XLSX.utils.json_to_sheet(wsWorkersData);
+        XLSX.utils.book_append_sheet(wb, wsWorkers, 'Workers Wage Ledger');
+      }
 
-      const wsExpensesData = expenses.map(e => ({
-        'Category': e.category,
-        'Amount (₹)': e.amount,
-        'Description': e.description,
-        'Date Logged': e.date
-      }));
-      const wsExpenses = XLSX.utils.json_to_sheet(wsExpensesData);
-      XLSX.utils.book_append_sheet(wb, wsExpenses, 'Other Farm Expenses');
+      if (reportType === 'all' || reportType === 'payment') {
+        const wsPaymentsData = filteredPayments.map(p => {
+          const worker = workers.find(w => w.id === p.workerId);
+          return {
+            'Worker Name': worker ? worker.name : 'Unknown',
+            'Amount Paid (₹)': p.amount,
+            'Date': p.date,
+            'Note': p.note
+          };
+        });
+        const wsPayments = XLSX.utils.json_to_sheet(wsPaymentsData);
+        XLSX.utils.book_append_sheet(wb, wsPayments, 'Payments Log');
+      }
 
-      XLSX.writeFile(wb, `Pramesh_AgriBook_Report_2026-06-23.xlsx`);
+      if (reportType === 'all' || reportType === 'expense') {
+        const wsExpensesData = filteredExpenses.map(e => ({
+          'Category': e.category,
+          'Amount (₹)': e.amount,
+          'Description': e.description,
+          'Notes': e.notes || '',
+          'Date Logged': e.date
+        }));
+        const wsExpenses = XLSX.utils.json_to_sheet(wsExpensesData);
+        XLSX.utils.book_append_sheet(wb, wsExpenses, 'Other Farm Expenses');
+      }
+
+      if (reportType === 'all' || reportType === 'attendance') {
+        const wsAttendanceData = filteredAttendance.map(a => {
+          const worker = workers.find(w => w.id === a.workerId);
+          return {
+            'Worker Name': worker ? worker.name : 'Unknown',
+            'Date': a.date,
+            'Status': a.status
+          };
+        });
+        const wsAttendance = XLSX.utils.json_to_sheet(wsAttendanceData);
+        XLSX.utils.book_append_sheet(wb, wsAttendance, 'Attendance Registry');
+      }
+
+      const todayStr = getLocalDateString();
+      XLSX.writeFile(wb, `Paramesh_AgriBook_Report_${todayStr}.xlsx`);
       showToast("Excel file downloaded!", "success");
     } catch (error) {
       showToast("Excel export failed", "error");
@@ -208,66 +336,131 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const handleExportPdf = () => {
     try {
       const doc = new jsPDF();
+      const todayStr = getLocalDateString();
       
-      doc.setFontSize(22);
+      doc.setFontSize(20);
       doc.setTextColor(46, 125, 50); // Primary green
-      doc.text('Pramesh AgriBook - Farm Ledger', 14, 20);
+      doc.text('Paramesh AgriBook - Farm Ledger', 14, 20);
       
       doc.setFontSize(10);
       doc.setTextColor(110, 110, 110);
-      doc.text(`Monthly Summary Report | Date: 23 June 2026`, 14, 26);
+      doc.text(`Report Type: ${reportType.toUpperCase()} | Generated on: ${todayStr}`, 14, 26);
+      
+      if (startDate || endDate) {
+        doc.text(`Date Range: ${startDate || 'All Time'} to ${endDate || 'All Time'}`, 14, 31);
+      }
       
       doc.setFontSize(12);
       doc.setTextColor(38, 50, 56);
-      doc.text(`Total Labor Cost: Rs. ${totalLaborCost}`, 14, 38);
-      doc.text(`Total Other Expenses: Rs. ${totalOtherExpenses}`, 14, 44);
-      doc.text(`Total Wages Paid: Rs. ${totalWagesPaid}`, 14, 50);
-      doc.text(`Total Wages Outstanding: Rs. ${totalWagesPending}`, 14, 56);
-      doc.text(`Total Investment (Spending): Rs. ${totalFarmSpending}`, 14, 62);
+      doc.text(`Total Labor Cost: Rs. ${totalLaborCost}`, 14, 40);
+      doc.text(`Total Other Expenses: Rs. ${totalOtherExpenses}`, 14, 46);
+      doc.text(`Total Wages Paid: Rs. ${totalWagesPaid}`, 14, 52);
+      doc.text(`Total Wages Outstanding: Rs. ${totalWagesPending}`, 14, 58);
+      doc.text(`Total Investment: Rs. ${totalFarmSpending}`, 14, 64);
       
-      doc.setFontSize(14);
-      doc.setTextColor(46, 125, 50);
-      doc.text('1. Workers Payout Ledger', 14, 76);
-      
-      const workerHeaders = [['Name', 'Village', 'Wage', 'Days', 'Earned', 'Paid', 'Pending']];
-      const workerRows = workerSummaries.map(s => [
-        s.name,
-        s.village || 'N/A',
-        `Rs. ${s.dailyWage}`,
-        s.daysWorked,
-        `Rs. ${s.earned}`,
-        `Rs. ${s.paid}`,
-        `Rs. ${s.pending}`
-      ]);
-      
-      doc.autoTable({
-        startY: 80,
-        head: workerHeaders,
-        body: workerRows,
-        theme: 'striped',
-        headStyles: { fillColor: [46, 125, 50] }
-      });
-      
-      const finalY = (doc as any).lastAutoTable.finalY + 12;
-      doc.text('2. Farm Expenses Ledger', 14, finalY);
-      
-      const expenseHeaders = [['Category', 'Amount', 'Description', 'Date']];
-      const expenseRows = expenses.map(e => [
-        e.category,
-        `Rs. ${e.amount}`,
-        e.description,
-        e.date
-      ]);
-      
-      doc.autoTable({
-        startY: finalY + 4,
-        head: expenseHeaders,
-        body: expenseRows,
-        theme: 'striped',
-        headStyles: { fillColor: [249, 168, 37] } // Accent Gold
-      });
+      let nextStartY = 76;
 
-      doc.save(`Pramesh_AgriBook_Report_2026-06-23.pdf`);
+      if (reportType === 'all' || reportType === 'worker') {
+        doc.setFontSize(14);
+        doc.setTextColor(46, 125, 50);
+        doc.text('1. Workers Payout Ledger', 14, nextStartY);
+        
+        const workerHeaders = [['Name', 'Village', 'Wage', 'Days', 'Earned', 'Paid', 'Pending']];
+        const workerRows = workerSummaries.map(s => [
+          s.name,
+          s.village || 'N/A',
+          `Rs. ${s.dailyWage}`,
+          s.daysWorked,
+          `Rs. ${s.earned}`,
+          `Rs. ${s.paid}`,
+          `Rs. ${s.pending}`
+        ]);
+        
+        doc.autoTable({
+          startY: nextStartY + 4,
+          head: workerHeaders,
+          body: workerRows,
+          theme: 'striped',
+          headStyles: { fillColor: [46, 125, 50] }
+        });
+        nextStartY = (doc as any).lastAutoTable.finalY + 12;
+      }
+      
+      if (reportType === 'all' || reportType === 'expense') {
+        doc.setFontSize(14);
+        doc.setTextColor(46, 125, 50);
+        doc.text(reportType === 'all' ? '2. Farm Expenses Ledger' : 'Farm Expenses Ledger', 14, nextStartY);
+        
+        const expenseHeaders = [['Category', 'Amount', 'Description', 'Notes', 'Date']];
+        const expenseRows = filteredExpenses.map(e => [
+          e.category,
+          `Rs. ${e.amount}`,
+          e.description,
+          e.notes || '',
+          e.date
+        ]);
+        
+        doc.autoTable({
+          startY: nextStartY + 4,
+          head: expenseHeaders,
+          body: expenseRows,
+          theme: 'striped',
+          headStyles: { fillColor: [249, 168, 37] }
+        });
+        nextStartY = (doc as any).lastAutoTable.finalY + 12;
+      }
+
+      if (reportType === 'all' || reportType === 'payment') {
+        doc.setFontSize(14);
+        doc.setTextColor(46, 125, 50);
+        doc.text(reportType === 'all' ? '3. Payments Ledger' : 'Payments Ledger', 14, nextStartY);
+        
+        const paymentHeaders = [['Worker Name', 'Amount', 'Date', 'Note']];
+        const paymentRows = filteredPayments.map(p => {
+          const worker = workers.find(w => w.id === p.workerId);
+          return [
+            worker ? worker.name : 'Unknown',
+            `Rs. ${p.amount}`,
+            p.date,
+            p.note || ''
+          ];
+        });
+        
+        doc.autoTable({
+          startY: nextStartY + 4,
+          head: paymentHeaders,
+          body: paymentRows,
+          theme: 'striped',
+          headStyles: { fillColor: [33, 150, 243] }
+        });
+        nextStartY = (doc as any).lastAutoTable.finalY + 12;
+      }
+
+      if (reportType === 'all' || reportType === 'attendance') {
+        doc.setFontSize(14);
+        doc.setTextColor(46, 125, 50);
+        doc.text(reportType === 'all' ? '4. Attendance Registry' : 'Attendance Registry', 14, nextStartY);
+        
+        const attendanceHeaders = [['Worker Name', 'Date', 'Status']];
+        const attendanceRows = filteredAttendance.map(a => {
+          const worker = workers.find(w => w.id === a.workerId);
+          return [
+            worker ? worker.name : 'Unknown',
+            a.date,
+            a.status
+          ];
+        });
+        
+        doc.autoTable({
+          startY: nextStartY + 4,
+          head: attendanceHeaders,
+          body: attendanceRows,
+          theme: 'striped',
+          headStyles: { fillColor: [156, 39, 176] }
+        });
+      }
+
+      doc.save(`Paramesh_AgriBook_Report_${todayStr}.pdf`);
       showToast("PDF report downloaded!", "success");
     } catch (error) {
       showToast("PDF export failed", "error");
@@ -301,7 +494,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
         {/* Global Empty State check */}
         {workers.length === 0 && expenses.length === 0 ? (
-          /* SVG Empty State illustration */
           <div className="flex-1 flex flex-col items-center justify-center p-8 bg-white border border-[#E0DBC5]/30 rounded-3xl shadow-soft min-h-[350px] my-5">
             <svg className="w-36 h-36 text-primary/20" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
               <circle cx="100" cy="100" r="70" stroke="#2E7D32" strokeWidth="5" strokeDasharray="10 5" />
@@ -310,7 +502,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               <circle cx="90" cy="90" r="4" fill="#F9A825" />
             </svg>
             <h3 className="text-lg font-black text-text-dark mt-4">
-              No reports available
+              No reports generated.
             </h3>
             <p className="text-xs text-gray-400 font-semibold mt-1.5 text-center leading-normal">
               Enter worker details, mark their attendance, and log farm expenses to generate smart ledger charts automatically.
@@ -318,6 +510,63 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           </div>
         ) : (
           <>
+            {/* Filters Controls Box */}
+            <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4 mb-5 shrink-0">
+              <div className="grid grid-cols-2 gap-3">
+                {/* Report Type */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">Report Type</label>
+                  <select
+                    value={reportType}
+                    onChange={(e) => setReportType(e.target.value)}
+                    className="bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-medium rounded-xl py-2.5 px-3 text-xs focus:outline-none focus:border-primary focus:bg-white"
+                  >
+                    <option value="all">All Data / మొత్తం సమాచారం</option>
+                    <option value="worker">Worker Wages / కూలీల లెక్కలు</option>
+                    <option value="payment">Payments / చెల్లింపులు</option>
+                    <option value="expense">Expenses / ఖర్చులు</option>
+                    <option value="attendance">Attendance / హాజరు పట్టిక</option>
+                  </select>
+                </div>
+
+                {/* Search */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">Search Keyword</label>
+                  <input
+                    type="text"
+                    placeholder="Search..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-medium rounded-xl py-2.5 px-3 text-xs focus:outline-none focus:border-primary focus:bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                {/* Start Date */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">Start Date</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-medium rounded-xl py-2.5 px-3 text-xs focus:outline-none focus:border-primary focus:bg-white"
+                  />
+                </div>
+
+                {/* End Date */}
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">End Date</label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-medium rounded-xl py-2.5 px-3 text-xs focus:outline-none focus:border-primary focus:bg-white"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* Tabs */}
             <div className="flex bg-white p-1 rounded-2xl border border-[#E0DBC5]/40 shadow-soft mb-5 shrink-0">
               <button
@@ -389,23 +638,26 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4 border-l-4 border-accent pl-2">
                     Monthly Trend / నెలవారీ పోకడలు
                   </h3>
-                  <div className="h-60 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={monthlyBarData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#f0efe9" />
-                        <XAxis dataKey="name" stroke="#8e8c84" fontSize={9} tickLine={false} />
-                        <YAxis stroke="#8e8c84" fontSize={9} tickLine={false} />
-                        <Tooltip formatter={(value) => `₹${value}`} />
-                        <Legend iconSize={8} wrapperStyle={{ fontSize: '9px', fontWeight: 'bold' }} />
-                        <Bar dataKey="Labor" fill="#2E7D32" name="Labor Cost" radius={[4, 4, 0, 0]} />
-                        <Bar dataKey="Expenses" fill="#F9A825" name="Other Expenses" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                  {monthlyBarData.length === 0 ? (
+                    <p className="text-xs text-gray-400 py-10 text-center font-medium">Add data to view monthly trends.</p>
+                  ) : (
+                    <div className="h-60 w-full">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={monthlyBarData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#f0efe9" />
+                          <XAxis dataKey="name" stroke="#8e8c84" fontSize={9} tickLine={false} />
+                          <YAxis stroke="#8e8c84" fontSize={9} tickLine={false} />
+                          <Tooltip formatter={(value) => `₹${value}`} />
+                          <Legend iconSize={8} wrapperStyle={{ fontSize: '9px', fontWeight: 'bold' }} />
+                          <Bar dataKey="Labor" fill="#2E7D32" name="Labor Cost" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="Expenses" fill="#F9A825" name="Other Expenses" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : activeTab === 'rankings' ? (
-              /* Worker Rankings Tab */
               <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4">
                 <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider border-l-4 border-primary pl-2 mb-2">
                   Worker Earnings Ranking / ఎక్కువ సంపాదించిన పనివారు
@@ -418,7 +670,6 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       className="flex items-center justify-between p-3 bg-[#F8F5E9]/20 border border-[#E0DBC5]/15 rounded-2xl"
                     >
                       <div className="flex items-center gap-3">
-                        {/* Medal Rank badge */}
                         <div className={`w-8 h-8 rounded-full flex items-center justify-center font-extrabold text-sm ${
                           idx === 0 ? 'bg-amber-100 text-amber-700' :
                           idx === 1 ? 'bg-slate-100 text-slate-700' :
@@ -437,73 +688,207 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       </div>
                     </div>
                   ))}
+                  {rankedWorkers.length === 0 && (
+                    <p className="text-xs text-gray-400 py-10 text-center font-medium">No ranked worker data available.</p>
+                  )}
                 </div>
               </div>
             ) : (
-              /* Statistics / Summary Tab */
               <div className="space-y-4">
-                {/* Highlights grid */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
-                    <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
-                      {t('mostRegularWorker', lang)}
-                    </span>
-                    <span className="text-sm font-bold text-text-dark block mt-1 leading-tight">
-                      {mostRegularWorker}
-                    </span>
-                  </div>
-                  <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
-                    <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
-                      {t('highestPaidWorker', lang)}
-                    </span>
-                    <span className="text-sm font-bold text-text-dark block mt-1 leading-tight">
-                      {highestPaidWorker}
-                    </span>
-                  </div>
-                  <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
-                    <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
-                      {t('biggestExpense', lang)}
-                    </span>
-                    <span className="text-sm font-bold text-text-dark block mt-1 leading-tight truncate">
-                      {biggestExpenseCategory}
-                    </span>
-                  </div>
-                  <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
-                    <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
-                      {t('laborPercentage', lang)}
-                    </span>
-                    <span className="text-sm font-bold text-text-dark block mt-1 leading-tight">
-                      {laborPercentageVal}%
-                    </span>
-                  </div>
-                </div>
+                {reportType === 'all' ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
+                        <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
+                          {t('mostRegularWorker', lang)}
+                        </span>
+                        <span className="text-sm font-bold text-text-dark block mt-1 leading-tight">
+                          {mostRegularWorker}
+                        </span>
+                      </div>
+                      <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
+                        <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
+                          {t('highestPaidWorker', lang)}
+                        </span>
+                        <span className="text-sm font-bold text-text-dark block mt-1 leading-tight">
+                          {highestPaidWorker}
+                        </span>
+                      </div>
+                      <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
+                        <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
+                          {t('biggestExpense', lang)}
+                        </span>
+                        <span className="text-sm font-bold text-text-dark block mt-1 leading-tight truncate">
+                          {biggestExpenseCategory}
+                        </span>
+                      </div>
+                      <div className="bg-white p-4 rounded-2xl border border-[#E0DBC5]/40 shadow-soft">
+                        <span className="text-[9px] text-gray-400 font-bold uppercase block tracking-wider">
+                          {t('laborPercentage', lang)}
+                        </span>
+                        <span className="text-sm font-bold text-text-dark block mt-1 leading-tight">
+                          {laborPercentageVal}%
+                        </span>
+                      </div>
+                    </div>
 
-                {/* Financial overview ledger table */}
-                <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-3">
-                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">
-                    {t('statistics', lang)}
-                  </h3>
-                  <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
-                    <span className="text-gray-500">Total spent on workers</span>
-                    <span className="font-bold text-text-dark">₹{totalLaborCost}</span>
+                    <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-3">
+                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">
+                        {t('statistics', lang)}
+                      </h3>
+                      <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
+                        <span className="text-gray-500">Total spent on workers</span>
+                        <span className="font-bold text-text-dark">₹{totalLaborCost}</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
+                        <span className="text-gray-500">Other expenses logged</span>
+                        <span className="font-bold text-text-dark">₹{totalOtherExpenses}</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
+                        <span className="text-gray-500">Total wages already paid</span>
+                        <span className="font-bold text-success-green">₹{totalWagesPaid}</span>
+                      </div>
+                      <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
+                        <span className="text-gray-500">Outstanding wages to pay</span>
+                        <span className="font-bold text-danger-red">₹{totalWagesPending}</span>
+                      </div>
+                      <div className="flex justify-between text-sm font-extrabold pt-1">
+                        <span className="text-primary">Total Farm Spending</span>
+                        <span className="text-primary">₹{totalFarmSpending}</span>
+                      </div>
+                    </div>
+                  </>
+                ) : reportType === 'worker' ? (
+                  <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-3">
+                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Worker Wages Summary</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead>
+                          <tr className="border-b border-gray-100 text-gray-400 font-bold">
+                            <th className="py-2">Name</th>
+                            <th className="py-2 text-center">Days</th>
+                            <th className="py-2 text-right">Earned</th>
+                            <th className="py-2 text-right">Paid</th>
+                            <th className="py-2 text-right text-danger-red">Pending</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {workerSummaries.map(s => (
+                            <tr key={s.id} className="border-b border-gray-50 font-semibold text-text-dark">
+                              <td className="py-2 font-bold">{s.name}</td>
+                              <td className="py-2 text-center">{s.daysWorked}</td>
+                              <td className="py-2 text-right">₹{s.earned}</td>
+                              <td className="py-2 text-right text-success-green">₹{s.paid}</td>
+                              <td className="py-2 text-right text-danger-red">₹{s.pending}</td>
+                            </tr>
+                          ))}
+                          {workerSummaries.length === 0 && (
+                            <tr><td colSpan={5} className="py-4 text-center text-gray-400">No records found</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
-                    <span className="text-gray-500">Other expenses logged</span>
-                    <span className="font-bold text-text-dark">₹{totalOtherExpenses}</span>
+                ) : reportType === 'payment' ? (
+                  <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-3">
+                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Payments Report</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead>
+                          <tr className="border-b border-gray-100 text-gray-400 font-bold">
+                            <th className="py-2">Worker</th>
+                            <th className="py-2 text-right">Amount</th>
+                            <th className="py-2">Date</th>
+                            <th className="py-2">Note</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredPayments.map(p => {
+                            const worker = workers.find(w => w.id === p.workerId);
+                            return (
+                              <tr key={p.id} className="border-b border-gray-50 font-semibold text-text-dark">
+                                <td className="py-2 font-bold">{worker ? worker.name : 'Unknown'}</td>
+                                <td className="py-2 text-right text-success-green">₹{p.amount}</td>
+                                <td className="py-2">{p.date}</td>
+                                <td className="py-2 text-gray-400 truncate max-w-[100px]">{p.note || '-'}</td>
+                              </tr>
+                            );
+                          })}
+                          {filteredPayments.length === 0 && (
+                            <tr><td colSpan={4} className="py-4 text-center text-gray-400">No records found</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
-                    <span className="text-gray-500">Total wages already paid</span>
-                    <span className="font-bold text-success-green">₹{totalWagesPaid}</span>
+                ) : reportType === 'expense' ? (
+                  <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-3">
+                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Expenses Report</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead>
+                          <tr className="border-b border-gray-100 text-gray-400 font-bold">
+                            <th className="py-2">Category</th>
+                            <th className="py-2 text-right">Amount</th>
+                            <th className="py-2">Date</th>
+                            <th className="py-2">Description</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredExpenses.map(e => (
+                            <tr key={e.id} className="border-b border-gray-50 font-semibold text-text-dark">
+                              <td className="py-2 font-bold">{e.category}</td>
+                              <td className="py-2 text-right text-danger-red font-black">₹{e.amount}</td>
+                              <td className="py-2">{e.date}</td>
+                              <td className="py-2 text-gray-400 truncate max-w-[100px]">{e.description || '-'}</td>
+                            </tr>
+                          ))}
+                          {filteredExpenses.length === 0 && (
+                            <tr><td colSpan={4} className="py-4 text-center text-gray-400">No records found</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-xs font-medium border-b border-gray-50 pb-2">
-                    <span className="text-gray-500">Outstanding wages to pay</span>
-                    <span className="font-bold text-danger-red">₹{totalWagesPending}</span>
+                ) : (
+                  <div className="bg-white p-4 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-3">
+                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Attendance Log</h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead>
+                          <tr className="border-b border-gray-100 text-gray-400 font-bold">
+                            <th className="py-2">Worker</th>
+                            <th className="py-2">Date</th>
+                            <th className="py-2">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredAttendance.map(a => {
+                            const worker = workers.find(w => w.id === a.workerId);
+                            return (
+                              <tr key={a.id} className="border-b border-gray-50 font-semibold text-text-dark">
+                                <td className="py-2 font-bold">{worker ? worker.name : 'Unknown'}</td>
+                                <td className="py-2">{a.date}</td>
+                                <td className="py-2 capitalize">
+                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    a.status === 'present' ? 'bg-success-green/10 text-success-green' :
+                                    a.status === 'half_day' ? 'bg-amber-100 text-amber-700' :
+                                    'bg-danger-red/10 text-danger-red'
+                                  }`}>
+                                    {a.status}
+                                  </span>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {filteredAttendance.length === 0 && (
+                            <tr><td colSpan={3} className="py-4 text-center text-gray-400">No records found</td></tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-sm font-extrabold pt-1">
-                    <span className="text-primary">Total Farm Spending</span>
-                    <span className="text-primary">₹{totalFarmSpending}</span>
-                  </div>
-                </div>
+                )}
               </div>
             )}
 
