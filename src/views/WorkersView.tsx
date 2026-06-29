@@ -11,7 +11,10 @@ import {
   removeWorker,
   fetchPayments,
   createPayment,
-  fetchAttendance
+  fetchAttendance,
+  CropCycle,
+  filterByCrop,
+  editCropCycle
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
@@ -19,16 +22,24 @@ interface WorkersViewProps {
   lang: Language;
   bilingual: boolean;
   showToast: (message: string, type: 'success' | 'error') => void;
+  selectedCropCycleId: string;
+  cropCycles: CropCycle[];
+  onRefreshCropCycles: () => Promise<void>;
 }
 
 export const WorkersView: React.FC<WorkersViewProps> = ({
   lang,
   bilingual,
-  showToast
+  showToast,
+  selectedCropCycleId,
+  cropCycles,
+  onRefreshCropCycles
 }) => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [rawPayments, setRawPayments] = useState<Payment[]>([]);
+  const [rawAttendance, setRawAttendance] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'wage_asc' | 'wage_desc' | 'date'>('name');
@@ -39,7 +50,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
   const [editingWorker, setEditingWorker] = useState<Worker | null>(null);
   const [activeWorkerForPay, setActiveWorkerForPay] = useState<{ worker: Worker; pending: number } | null>(null);
   const [historyWorker, setHistoryWorker] = useState<Worker | null>(null);
-  const [historyTab, setHistoryTab] = useState<'attendance' | 'payments'>('attendance');
+  const [historyTab, setHistoryTab] = useState<'attendance' | 'payments' | 'cropHistory'>('attendance');
   
   // Worker Form fields
   const [name, setName] = useState('');
@@ -57,19 +68,30 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [selectedCropCycleId]);
 
   const loadData = async () => {
     setLoading(true);
     try {
       const workersData = await fetchWorkers();
-      setWorkers(workersData);
-      
       const paymentsData = await fetchPayments();
-      setPayments(paymentsData);
-      
       const allAtt = await fetchAttendance();
-      setAttendance(allAtt);
+
+      // Find workers assigned to crop cycle if specific one is selected
+      const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+      const assignedIds = cropObj ? cropObj.workerIds || [] : [];
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+        ? workersData 
+        : workersData.filter(w => assignedIds.includes(w.id));
+
+      const filteredPayments = filterByCrop(paymentsData, selectedCropCycleId);
+      const filteredAttendance = filterByCrop(allAtt, selectedCropCycleId);
+
+      setWorkers(filteredWorkers);
+      setPayments(filteredPayments);
+      setAttendance(filteredAttendance);
+      setRawPayments(paymentsData);
+      setRawAttendance(allAtt);
     } catch (e) {
       showToast("Error loading workers data", "error");
     } finally {
@@ -137,7 +159,19 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
         showToast("Worker updated successfully", "success");
       } else {
         if (!window.confirm("Are you sure you want to add this new worker?")) return;
-        await createWorker(workerData);
+        const newId = await createWorker(workerData);
+        if (selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy') {
+          const activeCrop = cropCycles.find(c => c.id === selectedCropCycleId);
+          if (activeCrop) {
+            const currentWorkerIds = activeCrop.workerIds || [];
+            if (!currentWorkerIds.includes(newId)) {
+              await editCropCycle(selectedCropCycleId, {
+                workerIds: [...currentWorkerIds, newId]
+              });
+              await onRefreshCropCycles();
+            }
+          }
+        }
         showToast("Worker added successfully", "success");
       }
 
@@ -316,10 +350,14 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       ) : (
         <div className="space-y-4 flex-1">
           {sortedAndFilteredWorkers.map(w => {
-            // Wage calculations (incorporating half days)
-            const presentDays = attendance.filter(a => a.workerId === w.id && a.status === 'present').length;
-            const halfDays = attendance.filter(a => a.workerId === w.id && a.status === 'half_day').length;
-            const earned = (presentDays + (halfDays * 0.5)) * w.dailyWage;
+            // Wage calculations (incorporating variable wages and half days)
+            const workerAtt = attendance.filter(a => a.workerId === w.id);
+            const earned = workerAtt.reduce((sum, a) => {
+              const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
+              if (a.status === 'present') return sum + wage;
+              if (a.status === 'half_day') return sum + wage * 0.5;
+              return sum;
+            }, 0);
             const paid = payments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
             const pending = earned - paid;
             const pendingVal = pending > 0 ? pending : 0;
@@ -714,10 +752,14 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
               {(() => {
                 const wAtt = attendance.filter(a => a.workerId === historyWorker.id);
                 const wPay = payments.filter(p => p.workerId === historyWorker.id);
-                
                 const pDays = wAtt.filter(a => a.status === 'present').length;
                 const hDays = wAtt.filter(a => a.status === 'half_day').length;
-                const totalEarned = (pDays + (hDays * 0.5)) * historyWorker.dailyWage;
+                const totalEarned = wAtt.reduce((sum, a) => {
+                  const wage = a.wageForDay !== undefined ? a.wageForDay : historyWorker.dailyWage;
+                  if (a.status === 'present') return sum + wage;
+                  if (a.status === 'half_day') return sum + wage * 0.5;
+                  return sum;
+                }, 0);
                 const totalPaid = wPay.reduce((sum, p) => sum + p.amount, 0);
                 const balance = totalEarned - totalPaid;
                 
@@ -752,7 +794,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                     </div>
 
                     {/* Tabs inside history drawer */}
-                    <div className="flex bg-[#F8F5E9] p-1 rounded-xl border border-[#E0DBC5]/50 mb-4 text-xs">
+                    <div className="flex bg-[#F8F5E9] p-1 rounded-xl border border-[#E0DBC5]/50 mb-4 text-[10px] gap-0.5">
                       <button
                         type="button"
                         onClick={() => setHistoryTab('attendance')}
@@ -771,6 +813,15 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                       >
                         Payments ({wPay.length})
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setHistoryTab('cropHistory')}
+                        className={`flex-1 py-2 font-bold rounded-lg transition-all cursor-pointer ${
+                          historyTab === 'cropHistory' ? 'bg-primary text-white shadow-sm' : 'text-gray-500'
+                        }`}
+                      >
+                        Crop History
+                      </button>
                     </div>
 
                     {/* Tab contents */}
@@ -783,7 +834,10 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                             .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
                             .map(a => (
                               <div key={a.id || a.date} className="flex justify-between items-center bg-[#F8F5E9]/20 border border-[#E0DBC5]/10 p-2.5 rounded-xl">
-                                <span className="text-xs font-bold text-text-dark">{a.date}</span>
+                                <div>
+                                  <span className="text-xs font-bold text-text-dark block">{a.date}</span>
+                                  {a.workType && <span className="text-[9px] text-gray-400 block mt-0.5">{a.workType}</span>}
+                                </div>
                                 <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
                                   a.status === 'present' 
                                     ? 'bg-success-green/10 text-success-green' 
@@ -796,7 +850,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                               </div>
                             ))
                         )
-                      ) : (
+                      ) : historyTab === 'payments' ? (
                         wPay.length === 0 ? (
                           <div className="text-center py-10 text-gray-400 text-xs">No payments recorded.</div>
                         ) : (
@@ -812,6 +866,87 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                               </div>
                             ))
                         )
+                      ) : (
+                        (() => {
+                          const cropRows = cropCycles.map(c => {
+                            const cycleAtt = rawAttendance.filter(a => a.workerId === historyWorker.id && a.cropCycleId === c.id);
+                            const cyclePay = rawPayments.filter(p => p.workerId === historyWorker.id && p.cropCycleId === c.id);
+                            const pDays = cycleAtt.filter(a => a.status === 'present').length;
+                            const hDays = cycleAtt.filter(a => a.status === 'half_day').length;
+                            const days = pDays + hDays * 0.5;
+                            const earned = cycleAtt.reduce((sum, a) => {
+                              const wage = a.wageForDay !== undefined ? a.wageForDay : historyWorker.dailyWage;
+                              if (a.status === 'present') return sum + wage;
+                              if (a.status === 'half_day') return sum + wage * 0.5;
+                              return sum;
+                            }, 0);
+                            const paid = cyclePay.reduce((sum, p) => sum + p.amount, 0);
+                            const balance = earned - paid;
+                            return { name: c.cropName, season: c.season, days, earned, paid, balance };
+                          }).filter(row => row.days > 0 || row.paid > 0);
+
+                          // Legacy records grouping
+                          const legacyAtt = rawAttendance.filter(a => a.workerId === historyWorker.id && !a.cropCycleId);
+                          const legacyPay = rawPayments.filter(p => p.workerId === historyWorker.id && !p.cropCycleId);
+                          const lpDays = legacyAtt.filter(a => a.status === 'present').length;
+                          const lhDays = legacyAtt.filter(a => a.status === 'half_day').length;
+                          const legacyDays = lpDays + lhDays * 0.5;
+                          const legacyEarned = legacyAtt.reduce((sum, a) => {
+                            const wage = a.wageForDay !== undefined ? a.wageForDay : historyWorker.dailyWage;
+                            if (a.status === 'present') return sum + wage;
+                            if (a.status === 'half_day') return sum + wage * 0.5;
+                            return sum;
+                          }, 0);
+                          const legacyPaid = legacyPay.reduce((sum, p) => sum + p.amount, 0);
+                          const legacyBalance = legacyEarned - legacyPaid;
+
+                          if (legacyDays > 0 || legacyPaid > 0) {
+                            cropRows.push({
+                              name: 'Legacy Records',
+                              season: 'N/A',
+                              days: legacyDays,
+                              earned: legacyEarned,
+                              paid: legacyPaid,
+                              balance: legacyBalance
+                            });
+                          }
+
+                          if (cropRows.length === 0) {
+                            return <div className="text-center py-10 text-gray-400 text-xs">No crop cycle history.</div>;
+                          }
+
+                          return (
+                            <div className="space-y-3">
+                              {cropRows.map((row, idx) => (
+                                <div key={idx} className="bg-[#F8F5E9]/30 border border-[#E0DBC5]/30 p-3 rounded-2xl flex flex-col gap-1.5 shadow-xs">
+                                  <div className="flex justify-between items-start">
+                                    <div>
+                                      <h4 className="text-[11px] font-bold text-text-dark leading-tight">{row.name}</h4>
+                                      {row.season && row.season !== 'N/A' && <span className="text-[8px] text-gray-400 font-extrabold block mt-0.5">{row.season}</span>}
+                                    </div>
+                                    <span className="text-[10px] font-extrabold text-primary">₹{row.earned} earned</span>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-2 text-center text-[10px] pt-1.5 border-t border-dashed border-[#E0DBC5]/20 mt-1">
+                                    <div>
+                                      <span className="text-[8px] text-gray-400 block font-bold">Days</span>
+                                      <span className="font-extrabold text-text-dark block">{row.days}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[8px] text-gray-400 block font-bold">Paid</span>
+                                      <span className="font-extrabold text-success-green block">₹{row.paid}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[8px] text-gray-400 block font-bold">{row.balance >= 0 ? 'Pending' : 'Advance'}</span>
+                                      <span className={`font-extrabold block ${row.balance >= 0 ? 'text-danger-red' : 'text-success-green'}`}>
+                                        ₹{Math.abs(row.balance)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()
                       )}
                     </div>
                   </>

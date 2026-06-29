@@ -236,8 +236,9 @@ export const getInsightsList = (
     workers.forEach(w => {
       const workerAtt = attendance.filter(a => a.workerId === w.id);
       const earned = workerAtt.reduce((sum, a) => {
-        if (a.status === 'present') return sum + w.dailyWage;
-        if (a.status === 'half_day') return sum + w.dailyWage * 0.5;
+        const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
+        if (a.status === 'present') return sum + wage;
+        if (a.status === 'half_day') return sum + wage * 0.5;
         return sum;
       }, 0);
       const paid = payments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
@@ -311,8 +312,9 @@ export const getInsightsList = (
   const curMonthLaborCost = curMonthAttendance.reduce((sum, a) => {
     const worker = workers.find(w => w.id === a.workerId);
     if (!worker) return sum;
+    const wage = a.wageForDay !== undefined ? a.wageForDay : worker.dailyWage;
     const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
-    return sum + (weight * worker.dailyWage);
+    return sum + (weight * wage);
   }, 0);
   const curMonthExpensesTotal = curMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
   const curMonthTotalSpending = curMonthLaborCost + curMonthExpensesTotal;
@@ -324,8 +326,9 @@ export const getInsightsList = (
   const prevMonthLaborCost = prevMonthAttendance.reduce((sum, a) => {
     const worker = workers.find(w => w.id === a.workerId);
     if (!worker) return sum;
+    const wage = a.wageForDay !== undefined ? a.wageForDay : worker.dailyWage;
     const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
-    return sum + (weight * worker.dailyWage);
+    return sum + (weight * wage);
   }, 0);
   const prevMonthExpensesTotal = prevMonthExpenses.reduce((sum, e) => sum + e.amount, 0);
   const prevMonthTotalSpending = prevMonthLaborCost + prevMonthExpensesTotal;

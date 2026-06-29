@@ -27,7 +27,9 @@ import {
   fetchAttendanceByDate,
   fetchAttendance,
   createPayment,
-  createExpense
+  createExpense,
+  CropCycle,
+  filterByCrop
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import { parseNaturalLanguage, getInsightsList, AIObservation, ParsedTransaction } from '../services/gemini';
@@ -38,6 +40,8 @@ interface DashboardViewProps {
   bilingual: boolean;
   onNavigate: (view: string) => void;
   showToast: (message: string, type: 'success' | 'error') => void;
+  selectedCropCycleId: string;
+  cropCycles: CropCycle[];
 }
 
 const getLocalDateString = (d: Date = new Date()) => {
@@ -73,7 +77,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   lang,
   bilingual,
   onNavigate,
-  showToast
+  showToast,
+  selectedCropCycleId,
+  cropCycles
 }) => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -98,7 +104,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [selectedCropCycleId]);
 
   const loadData = async () => {
     setLoading(true);
@@ -110,13 +116,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       const todayStr = getLocalDateString();
       const currentMonthStr = getLocalMonthString();
 
-      const todayAtt = allAttData.filter(a => a.date === todayStr);
+      // Apply Crop filters
+      const filteredExpenses = filterByCrop(expensesData, selectedCropCycleId);
+      const filteredPayments = filterByCrop(paymentsData, selectedCropCycleId);
+      const filteredAttendance = filterByCrop(allAttData, selectedCropCycleId);
+
+      const todayAtt = filteredAttendance.filter(a => a.date === todayStr);
 
       setWorkers(workersData);
-      setExpenses(expensesData);
-      setPayments(paymentsData);
+      setExpenses(filteredExpenses);
+      setPayments(filteredPayments);
       setTodayAttendance(todayAtt);
-      setAllAttendance(allAttData);
+      setAllAttendance(filteredAttendance);
 
       // Check if weekly report for the previous Sunday has been sent
       const prevSundayStr = getPreviousSundayDate();
@@ -125,9 +136,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       const isSent = logged.some((e: any) => e.weekRange === expectedWeekRange && e.success);
       setWeeklyReportSent(isSent);
 
-      // Load AI Insights programmatically
+      // Load AI Insights programmatically using filtered datasets
       setInsightsLoading(true);
-      const obs = getInsightsList(workersData, expensesData, paymentsData, allAttData, currentMonthStr);
+      const obs = getInsightsList(workersData, filteredExpenses, filteredPayments, filteredAttendance, currentMonthStr);
       setInsights(obs);
     } catch (e) {
       console.error(e);
@@ -191,7 +202,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           workerId: parsedResult.workerId,
           amount: parsedResult.amount,
           date: parsedResult.date,
-          note: parsedResult.description
+          note: parsedResult.description,
+          cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
         });
         showToast(t('paymentSuccess', lang), "success");
       } else if (parsedResult.type === 'expense') {
@@ -200,7 +212,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           amount: parsedResult.amount,
           description: parsedResult.description,
           notes: '',
-          date: parsedResult.date
+          date: parsedResult.date,
+          cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
         });
         showToast(t('expenseSuccess', lang), "success");
       } else {
@@ -240,12 +253,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   let totalLaborCost = 0;
   workers.forEach(w => {
     const workerAtt = currentMonthAttendance.filter((a: any) => a.workerId === w.id);
-    const days = workerAtt.reduce((sum, a) => {
-      if (a.status === 'present') return sum + 1;
-      if (a.status === 'half_day') return sum + 0.5;
+    const earned = workerAtt.reduce((sum, a) => {
+      const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
+      if (a.status === 'present') return sum + wage;
+      if (a.status === 'half_day') return sum + wage * 0.5;
       return sum;
     }, 0);
-    totalLaborCost += days * w.dailyWage;
+    totalLaborCost += earned;
   });
 
   const pendingWages = Math.max(0, totalLaborCost - currentMonthPayments);

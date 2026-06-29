@@ -77,7 +77,12 @@ export const calculateWeeklyReport = (
       if (a.status === 'half_day') return sum + 0.5;
       return sum;
     }, 0);
-    const totalEarned = daysWorked * w.dailyWage;
+    const totalEarned = workerAtt.reduce((sum, a) => {
+      const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
+      if (a.status === 'present') return sum + wage;
+      if (a.status === 'half_day') return sum + wage * 0.5;
+      return sum;
+    }, 0);
     totalLaborCost += totalEarned;
 
     // Payments for this worker during the week

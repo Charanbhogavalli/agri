@@ -24,7 +24,9 @@ import {
   createPayment, 
   editPayment, 
   removePayment,
-  fetchAttendance
+  fetchAttendance,
+  CropCycle,
+  filterByCrop
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
@@ -32,6 +34,8 @@ interface PaymentsViewProps {
   lang: Language;
   bilingual: boolean;
   showToast: (message: string, type: 'success' | 'error') => void;
+  selectedCropCycleId: string;
+  cropCycles: CropCycle[];
 }
 
 interface WorkerPaymentSummary {
@@ -46,7 +50,9 @@ interface WorkerPaymentSummary {
 export const PaymentsView: React.FC<PaymentsViewProps> = ({
   lang,
   bilingual,
-  showToast
+  showToast,
+  selectedCropCycleId,
+  cropCycles
 }) => {
   const [summaries, setSummaries] = useState<WorkerPaymentSummary[]>([]);
   const [globalPayments, setGlobalPayments] = useState<Payment[]>([]);
@@ -73,14 +79,25 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
 
   useEffect(() => {
     loadPaymentsData();
-  }, [startDate, endDate]);
+  }, [startDate, endDate, selectedCropCycleId]);
 
   const loadPaymentsData = async () => {
     setLoading(true);
     try {
       const workersData = await fetchWorkers();
-      const paymentsData = await fetchPayments();
-      const allAttendance = await fetchAttendance();
+      const rawPaymentsData = await fetchPayments();
+      const rawAttendance = await fetchAttendance();
+
+      // Filter attendance and payments by crop cycle
+      const paymentsData = filterByCrop(rawPaymentsData, selectedCropCycleId);
+      const allAttendance = filterByCrop(rawAttendance, selectedCropCycleId);
+
+      // Determine active workers for this crop
+      const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+      const assignedIds = cropObj ? cropObj.workerIds || [] : [];
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+        ? workersData 
+        : workersData.filter(w => assignedIds.includes(w.id));
 
       // Apply date filters to payments
       const filteredPayments = paymentsData.filter(p => {
@@ -94,11 +111,15 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
       setGlobalPayments(sortedGlobal);
 
       // Calculate summaries for each worker
-      const compiled: WorkerPaymentSummary[] = workersData.map(w => {
-        // Attendance calculations incorporating half days
-        const presentDays = allAttendance.filter(a => a.workerId === w.id && a.status === 'present').length;
-        const halfDays = allAttendance.filter(a => a.workerId === w.id && a.status === 'half_day').length;
-        const totalEarned = (presentDays + (halfDays * 0.5)) * w.dailyWage;
+      const compiled: WorkerPaymentSummary[] = filteredWorkers.map(w => {
+        // Attendance calculations incorporating variable wages and half days
+        const workerAtt = allAttendance.filter(a => a.workerId === w.id);
+        const totalEarned = workerAtt.reduce((sum, a) => {
+          const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
+          if (a.status === 'present') return sum + wage;
+          if (a.status === 'half_day') return sum + wage * 0.5;
+          return sum;
+        }, 0);
 
         // Payments for this worker
         const workerHistory = filteredPayments
@@ -147,6 +168,12 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
       return;
     }
 
+    // Validation: prevent payments greater than pending
+    if (amtNum > activeSummary.pendingAmount) {
+      showToast(t('validationPayExceedsPending', lang), "error");
+      return;
+    }
+
     if (!window.confirm(`Are you sure you want to record a payment of ₹${amtNum} for ${activeSummary.worker.name}?`)) {
       return;
     }
@@ -157,7 +184,8 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
         workerId: activeSummary.worker.id,
         amount: amtNum,
         date,
-        note: note.trim() || 'Wage Payment'
+        note: note.trim() || 'Wage Payment',
+        cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
       });
 
       showToast("Payment recorded successfully!", "success");
@@ -175,11 +203,17 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
     setAmount(payment.amount.toString());
     setDate(payment.date);
     setNote(payment.note);
-    // Create a temporary summary to display name in modal
-    setActiveSummary({
-      worker: { name: workerName } as Worker,
-      totalEarned: 0, totalPaid: 0, pendingAmount: 0, advanceAmount: 0, paymentHistory: []
-    });
+    
+    // Look up real summary for validation
+    const actualSummary = summaries.find(s => s.worker.id === payment.workerId);
+    if (actualSummary) {
+      setActiveSummary(actualSummary);
+    } else {
+      setActiveSummary({
+        worker: { name: workerName, id: payment.workerId } as Worker,
+        totalEarned: 0, totalPaid: 0, pendingAmount: 0, advanceAmount: 0, paymentHistory: []
+      });
+    }
     setShowEditModal(true);
   };
 
@@ -191,6 +225,15 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
     if (isNaN(amtNum) || amtNum <= 0) {
       showToast("Please enter a valid amount", "error");
       return;
+    }
+
+    // Validation: prevent payment greater than pending (ignoring the current payment amount being updated)
+    if (activeSummary) {
+      const maxAllowed = activeSummary.pendingAmount + editingPayment.amount;
+      if (amtNum > maxAllowed) {
+        showToast(t('validationPayExceedsPending', lang), "error");
+        return;
+      }
     }
 
     if (!window.confirm("Are you sure you want to update this payment record?")) {

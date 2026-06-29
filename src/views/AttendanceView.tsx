@@ -22,7 +22,9 @@ import {
   fetchAttendance, 
   saveAttendanceList, 
   editAttendance, 
-  removeAttendance 
+  removeAttendance,
+  CropCycle,
+  filterByCrop
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
@@ -30,12 +32,16 @@ interface AttendanceViewProps {
   lang: Language;
   bilingual: boolean;
   showToast: (message: string, type: 'success' | 'error') => void;
+  selectedCropCycleId: string;
+  cropCycles: CropCycle[];
 }
 
 export const AttendanceView: React.FC<AttendanceViewProps> = ({
   lang,
   bilingual,
-  showToast
+  showToast,
+  selectedCropCycleId,
+  cropCycles
 }) => {
   // Navigation tabs: 'register' (mark attendance) and 'history' (view/edit past records)
   const [activeTab, setActiveTab] = useState<'register' | 'history'>('register');
@@ -49,6 +55,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   // --- REGISTER TAB STATES ---
   const [selectedDate, setSelectedDate] = useState('2026-06-23'); // Target system date (Tuesday)
   const [registerAttendance, setRegisterAttendance] = useState<Record<string, 'present' | 'absent' | 'half_day'>>({});
+  const [registerWages, setRegisterWages] = useState<Record<string, string>>({});
+  const [registerWorkTypes, setRegisterWorkTypes] = useState<Record<string, string>>({});
+  const [registerNotes, setRegisterNotes] = useState<Record<string, string>>({});
   const [registerSearch, setRegisterSearch] = useState('');
 
   // --- HISTORY TAB STATES ---
@@ -58,30 +67,52 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'present' | 'absent' | 'half_day'>('all');
   const [editingRecord, setEditingRecord] = useState<AttendanceRecord | null>(null);
   const [editStatus, setEditStatus] = useState<'present' | 'absent' | 'half_day'>('present');
+  
+  // Edit modal fields
+  const [editWage, setEditWage] = useState('');
+  const [editWorkType, setEditWorkType] = useState('');
+  const [editNotes, setEditNotes] = useState('');
 
   useEffect(() => {
     loadData();
-  }, [selectedDate, activeTab]);
+  }, [selectedDate, activeTab, selectedCropCycleId]);
 
   const loadData = async () => {
     setLoading(true);
     try {
       const workersData = await fetchWorkers();
-      // Only active workers in the register tab
-      const activeWorkers = workersData.filter(w => w.status === 'active');
-      setWorkers(workersData); // Keep all workers for history rendering (even inactive ones might have history)
+      setWorkers(workersData); // Keep all workers for history rendering lookup
+
+      // Determine workers associated with selected crop cycle
+      const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+      const assignedIds = cropObj ? cropObj.workerIds || [] : [];
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+        ? workersData 
+        : workersData.filter(w => assignedIds.includes(w.id));
+
+      const activeWorkers = filteredWorkers.filter(w => w.status === 'active');
 
       if (activeTab === 'register') {
         const attendanceData = await fetchAttendanceByDate(selectedDate);
         const attMap: Record<string, 'present' | 'absent' | 'half_day'> = {};
+        const wageMap: Record<string, string> = {};
+        const typeMap: Record<string, string> = {};
+        const notesMap: Record<string, string> = {};
         
         activeWorkers.forEach(w => {
-          const record = attendanceData.find(a => a.workerId === w.id);
-          attMap[w.id] = record ? record.status : 'absent'; // default to absent if no record
+          const record = filterByCrop(attendanceData, selectedCropCycleId).find(a => a.workerId === w.id);
+          attMap[w.id] = record ? record.status : 'absent';
+          wageMap[w.id] = record && record.wageForDay !== undefined ? record.wageForDay.toString() : w.dailyWage.toString();
+          typeMap[w.id] = record && record.workType ? record.workType : '';
+          notesMap[w.id] = record && record.notes ? record.notes : '';
         });
         setRegisterAttendance(attMap);
+        setRegisterWages(wageMap);
+        setRegisterWorkTypes(typeMap);
+        setRegisterNotes(notesMap);
       } else {
-        const attendanceData = await fetchAttendance();
+        let attendanceData = await fetchAttendance();
+        attendanceData = filterByCrop(attendanceData, selectedCropCycleId);
         setAllAttendance(attendanceData);
       }
     } catch (e) {
@@ -96,14 +127,36 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       ...prev,
       [workerId]: status
     }));
+
+    // Autofill wage using default if empty or not set
+    const worker = workers.find(w => w.id === workerId);
+    if (worker && (!registerWages[workerId] || registerWages[workerId] === '0')) {
+      setRegisterWages(prev => ({
+        ...prev,
+        [workerId]: worker.dailyWage.toString()
+      }));
+    }
   };
 
   const handleMarkAll = (status: 'present' | 'absent' | 'half_day') => {
     const updated: Record<string, 'present' | 'absent' | 'half_day'> = {};
-    workers.filter(w => w.status === 'active').forEach(w => {
+    const updatedWages: Record<string, string> = { ...registerWages };
+
+    const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+    const assignedIds = cropObj ? cropObj.workerIds || [] : [];
+    const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+      ? workers 
+      : workers.filter(w => assignedIds.includes(w.id));
+
+    filteredWorkers.filter(w => w.status === 'active').forEach(w => {
       updated[w.id] = status;
+      if (status !== 'absent' && (!updatedWages[w.id] || updatedWages[w.id] === '0')) {
+        updatedWages[w.id] = w.dailyWage.toString();
+      }
     });
+
     setRegisterAttendance(updated);
+    setRegisterWages(updatedWages);
     
     let msg = "All workers marked absent";
     if (status === 'present') msg = "All workers marked present";
@@ -112,17 +165,36 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   };
 
   const handleSaveRegister = async () => {
+    // Validation: Check for negative daily wages for active workers
+    for (const [workerId, status] of Object.entries(registerAttendance)) {
+      if (status !== 'absent') {
+        const rawWage = parseFloat(registerWages[workerId]);
+        if (isNaN(rawWage) || rawWage < 0) {
+          showToast(t('validationNegative', lang), "error");
+          return;
+        }
+      }
+    }
+
     if (!window.confirm(`Are you sure you want to save attendance for ${formatDateLabel(selectedDate)}?`)) {
       return;
     }
     
     setSaving(true);
     try {
-      const recordsToSave = Object.entries(registerAttendance).map(([workerId, status]) => ({
-        workerId,
-        date: selectedDate,
-        status
-      }));
+      const recordsToSave = Object.entries(registerAttendance).map(([workerId, status]) => {
+        const rawWage = parseFloat(registerWages[workerId]);
+        const wageForDay = isNaN(rawWage) || status === 'absent' ? 0 : rawWage;
+        return {
+          workerId,
+          date: selectedDate,
+          status,
+          wageForDay,
+          workType: registerWorkTypes[workerId] || '',
+          notes: registerNotes[workerId] || '',
+          cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
+        };
+      });
 
       await saveAttendanceList(selectedDate, recordsToSave);
       showToast(t('attendanceSaved', lang), "success");
@@ -138,11 +210,22 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const handleOpenEdit = (record: AttendanceRecord) => {
     setEditingRecord(record);
     setEditStatus(record.status);
+
+    const worker = workers.find(w => w.id === record.workerId);
+    setEditWage(record.wageForDay !== undefined ? record.wageForDay.toString() : (worker ? worker.dailyWage.toString() : ''));
+    setEditWorkType(record.workType || '');
+    setEditNotes(record.notes || '');
   };
 
   const handleSaveEdit = async () => {
     if (!editingRecord) return;
     
+    const rawWage = parseFloat(editWage);
+    if (editStatus !== 'absent' && (isNaN(rawWage) || rawWage < 0)) {
+      showToast(t('validationNegative', lang), "error");
+      return;
+    }
+
     if (!window.confirm("Are you sure you want to change this attendance status?")) {
       return;
     }
@@ -150,7 +233,14 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
     try {
       // If Firestore, unique ID is workerId_date
       const docId = editingRecord.id || `${editingRecord.workerId}_${editingRecord.date}`;
-      await editAttendance(docId, { status: editStatus });
+      const wageForDay = isNaN(rawWage) || editStatus === 'absent' ? 0 : rawWage;
+      
+      await editAttendance(docId, { 
+        status: editStatus,
+        wageForDay,
+        workType: editWorkType,
+        notes: editNotes
+      });
       showToast("Attendance updated successfully", "success");
       setEditingRecord(null);
       loadData();
@@ -191,7 +281,12 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   };
 
   // --- REGISTER COMPUTED VALUES ---
-  const activeWorkers = workers.filter(w => w.status === 'active');
+  const activeCropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+  const assignedCropWorkerIds = activeCropObj ? activeCropObj.workerIds || [] : [];
+  const activeWorkers = workers.filter(w => 
+    w.status === 'active' && 
+    (selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' || assignedCropWorkerIds.includes(w.id))
+  );
   const filteredRegisterWorkers = activeWorkers.filter(w => 
     w.name.toLowerCase().includes(registerSearch.toLowerCase()) ||
     w.village.toLowerCase().includes(registerSearch.toLowerCase())
@@ -203,8 +298,10 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
   const totalLaborCostToday = activeWorkers.reduce((sum, w) => {
     const status = registerAttendance[w.id];
-    if (status === 'present') return sum + w.dailyWage;
-    if (status === 'half_day') return sum + w.dailyWage * 0.5;
+    const rawWage = parseFloat(registerWages[w.id]);
+    const wage = isNaN(rawWage) ? w.dailyWage : rawWage;
+    if (status === 'present') return sum + wage;
+    if (status === 'half_day') return sum + wage * 0.5;
     return sum;
   }, 0);
 
@@ -237,8 +334,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const totalHistLaborCost = filteredHistoryRecords.reduce((sum, r) => {
     const worker = workers.find(w => w.id === r.workerId);
     if (!worker) return sum;
-    if (r.status === 'present') return sum + worker.dailyWage;
-    if (r.status === 'half_day') return sum + worker.dailyWage * 0.5;
+    const wage = r.wageForDay !== undefined ? r.wageForDay : worker.dailyWage;
+    if (r.status === 'present') return sum + wage;
+    if (r.status === 'half_day') return sum + wage * 0.5;
     return sum;
   }, 0);
 
@@ -285,7 +383,18 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
         {/* ----------------- REGISTER TAB VIEW ----------------- */}
         {activeTab === 'register' && (
-          <div className="space-y-4">
+          selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' ? (
+            <div className="bg-white border border-[#E0DBC5]/40 rounded-3xl p-8 text-center shadow-soft my-6">
+              <Calendar className="mx-auto text-primary mb-3 animate-pulse" size={48} />
+              <h3 className="text-base font-bold text-text-dark">
+                {bilingual ? 'Select Crop Cycle / పంటను ఎంచుకోండి' : 'Select Crop Cycle'}
+              </h3>
+              <p className="text-xs text-gray-400 mt-2 max-w-xs mx-auto leading-relaxed">
+                {t('cropSelectAlert', lang)}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
             {/* Date Selector */}
             <div className="bg-white px-4 py-3 rounded-2xl border border-[#E0DBC5]/40 shadow-soft flex items-center justify-between">
               <button 
@@ -378,53 +487,93 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   return (
                     <div
                       key={w.id}
-                      className="p-4 rounded-3xl bg-white border border-[#E0DBC5]/40 shadow-soft flex items-center justify-between gap-2"
+                      className="p-4 rounded-3xl bg-white border border-[#E0DBC5]/40 shadow-soft flex flex-col gap-3"
                     >
-                      <div className="flex-1 min-w-0">
-                        <span className="text-sm font-bold text-text-dark block leading-tight truncate">
-                          {w.name}
-                        </span>
-                        <span className="text-[10px] text-gray-400 font-semibold mt-1 block">
-                          ₹{w.dailyWage} / day • {w.village || 'No Village'}
-                        </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-sm font-bold text-text-dark block leading-tight truncate">
+                            {w.name}
+                          </span>
+                          <span className="text-[10px] text-gray-400 font-semibold mt-1 block">
+                            ₹{w.dailyWage} / day • {w.village || 'No Village'}
+                          </span>
+                        </div>
+
+                        {/* Presence Toggle Buttons */}
+                        <div className="flex bg-[#F8F5E9] p-0.5 rounded-2xl border border-[#E0DBC5]/40 text-center shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleRegisterStatusChange(w.id, 'present')}
+                            className={`px-3 py-1.5 rounded-xl text-[10px] font-black transition-all cursor-pointer ${
+                              status === 'present' 
+                                ? 'bg-success-green text-white shadow-sm' 
+                                : 'text-gray-400 hover:text-gray-600'
+                            }`}
+                          >
+                            Present
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRegisterStatusChange(w.id, 'half_day')}
+                            className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all cursor-pointer ${
+                              status === 'half_day' 
+                                ? 'bg-amber-500 text-white shadow-sm' 
+                                : 'text-gray-400 hover:text-gray-600'
+                            }`}
+                          >
+                            Half Day
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleRegisterStatusChange(w.id, 'absent')}
+                            className={`px-3 py-1.5 rounded-xl text-[10px] font-black transition-all cursor-pointer ${
+                              status === 'absent' 
+                                ? 'bg-danger-red text-white shadow-sm' 
+                                : 'text-gray-400 hover:text-gray-600'
+                            }`}
+                          >
+                            Absent
+                          </button>
+                        </div>
                       </div>
 
-                      {/* Presence Toggle Buttons */}
-                      <div className="flex bg-[#F8F5E9] p-0.5 rounded-2xl border border-[#E0DBC5]/40 text-center shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => handleRegisterStatusChange(w.id, 'present')}
-                          className={`px-3 py-1.5 rounded-xl text-[10px] font-black transition-all cursor-pointer ${
-                            status === 'present' 
-                              ? 'bg-success-green text-white shadow-sm' 
-                              : 'text-gray-400 hover:text-gray-600'
-                          }`}
-                        >
-                          Present
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRegisterStatusChange(w.id, 'half_day')}
-                          className={`px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all cursor-pointer ${
-                            status === 'half_day' 
-                              ? 'bg-amber-500 text-white shadow-sm' 
-                              : 'text-gray-400 hover:text-gray-600'
-                          }`}
-                        >
-                          Half Day
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleRegisterStatusChange(w.id, 'absent')}
-                          className={`px-3 py-1.5 rounded-xl text-[10px] font-black transition-all cursor-pointer ${
-                            status === 'absent' 
-                              ? 'bg-danger-red text-white shadow-sm' 
-                              : 'text-gray-400 hover:text-gray-600'
-                          }`}
-                        >
-                          Absent
-                        </button>
-                      </div>
+                      {/* Variable Wage Details Input */}
+                      {status !== 'absent' && (
+                        <div className="pt-3 border-t border-[#E0DBC5]/30 grid grid-cols-3 gap-2">
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[8px] font-bold text-gray-400 uppercase tracking-wider pl-1">{t('wageForDay', lang)}</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={registerWages[w.id] || ''}
+                              onChange={(e) => setRegisterWages(prev => ({ ...prev, [w.id]: e.target.value }))}
+                              className="w-full bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-semibold rounded-lg py-1 px-2 text-[10px] focus:outline-none focus:border-primary"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[8px] font-bold text-gray-400 uppercase tracking-wider pl-1">{t('workType', lang)}</span>
+                            <input
+                              type="text"
+                              value={registerWorkTypes[w.id] || ''}
+                              onChange={(e) => setRegisterWorkTypes(prev => ({ ...prev, [w.id]: e.target.value }))}
+                              placeholder="weeding, harvesting..."
+                              className="w-full bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-semibold rounded-lg py-1 px-2 text-[10px] focus:outline-none focus:border-primary"
+                            />
+                          </div>
+
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[8px] font-bold text-gray-400 uppercase tracking-wider pl-1">{t('notes', lang)}</span>
+                            <input
+                              type="text"
+                              value={registerNotes[w.id] || ''}
+                              onChange={(e) => setRegisterNotes(prev => ({ ...prev, [w.id]: e.target.value }))}
+                              placeholder="extra hours..."
+                              className="w-full bg-[#F8F5E9]/50 border border-[#E0DBC5] text-text-dark font-semibold rounded-lg py-1 px-2 text-[10px] focus:outline-none focus:border-primary"
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -451,6 +600,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
               </div>
             )}
           </div>
+          )
         )}
 
         {/* ----------------- HISTORY TAB VIEW ----------------- */}
@@ -557,7 +707,9 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                   const worker = workers.find(w => w.id === r.workerId);
                   const workerName = worker ? worker.name : 'Unknown Worker';
                   const workerWage = worker ? worker.dailyWage : 0;
-                  
+                  const wage = r.wageForDay !== undefined ? r.wageForDay : workerWage;
+                  const finalCost = r.status === 'present' ? wage : r.status === 'half_day' ? wage * 0.5 : 0;
+
                   return (
                     <div
                       key={r.id || `${r.workerId}_${r.date}`}
@@ -577,7 +729,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                           </span>
                         </div>
                         <span className="text-[10px] text-gray-400 font-semibold block mt-1">
-                          Date: {r.date} • Wage: ₹{r.status === 'present' ? workerWage : r.status === 'half_day' ? workerWage * 0.5 : 0}
+                          Date: {r.date} • Wage: ₹{finalCost} {r.workType ? `• ${r.workType}` : ''} {r.notes ? `(${r.notes})` : ''}
                         </span>
                       </div>
 
@@ -658,6 +810,39 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
                       </button>
                     ))}
                   </div>
+
+                  {editStatus !== 'absent' && (
+                    <div className="grid grid-cols-2 gap-3 pt-2">
+                      <div className="flex flex-col gap-1 col-span-2">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('wageForDay', lang)}</label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={editWage}
+                          onChange={(e) => setEditWage(e.target.value)}
+                          className="form-input text-xs"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('workType', lang)}</label>
+                        <input
+                          type="text"
+                          value={editWorkType}
+                          onChange={(e) => setEditWorkType(e.target.value)}
+                          className="form-input text-xs"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('notes', lang)}</label>
+                        <input
+                          type="text"
+                          value={editNotes}
+                          onChange={(e) => setEditNotes(e.target.value)}
+                          className="form-input text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Buttons */}
                   <div className="flex gap-3 pt-4">

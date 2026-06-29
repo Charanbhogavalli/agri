@@ -14,19 +14,23 @@ import {
   FileText,
   Filter
 } from 'lucide-react';
-import { Expense, fetchExpenses, createExpense, editExpense, removeExpense } from '../firebase';
+import { Expense, fetchExpenses, createExpense, editExpense, removeExpense, CropCycle, filterByCrop } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
 interface ExpensesViewProps {
   lang: Language;
   bilingual: boolean;
   showToast: (message: string, type: 'success' | 'error') => void;
+  selectedCropCycleId: string;
+  cropCycles: CropCycle[];
 }
 
 export const ExpensesView: React.FC<ExpensesViewProps> = ({
   lang,
   bilingual,
-  showToast
+  showToast,
+  selectedCropCycleId,
+  cropCycles
 }) => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,12 +56,13 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
 
   useEffect(() => {
     loadExpenses();
-  }, [startDate, endDate]);
+  }, [startDate, endDate, selectedCropCycleId]);
 
   const loadExpenses = async () => {
     setLoading(true);
     try {
-      const data = await fetchExpenses();
+      const allData = await fetchExpenses();
+      const data = filterByCrop(allData, selectedCropCycleId);
       
       // Filter by date range first
       const dateFiltered = data.filter(e => {
@@ -100,7 +105,8 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
         amount: amtNum,
         description: description.trim(),
         notes: notes.trim(),
-        date
+        date,
+        cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
       });
 
       showToast("Expense recorded successfully!", "success");

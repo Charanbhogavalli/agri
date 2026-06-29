@@ -32,7 +32,9 @@ import {
   fetchWorkers,
   fetchExpenses,
   fetchPayments,
-  fetchAttendance
+  fetchAttendance,
+  CropCycle,
+  filterByCrop
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import * as XLSX from 'xlsx';
@@ -50,6 +52,8 @@ interface ReportsViewProps {
   lang: Language;
   bilingual: boolean;
   showToast: (message: string, type: 'success' | 'error') => void;
+  selectedCropCycleId: string;
+  cropCycles: CropCycle[];
 }
 
 const getLocalDateString = (d: Date = new Date()) => {
@@ -62,7 +66,9 @@ const getLocalDateString = (d: Date = new Date()) => {
 export const ReportsView: React.FC<ReportsViewProps> = ({
   lang,
   bilingual,
-  showToast
+  showToast,
+  selectedCropCycleId,
+  cropCycles
 }) => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -79,7 +85,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [selectedCropCycleId]);
 
   const loadData = async () => {
     setLoading(true);
@@ -89,10 +95,20 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       const pData = await fetchPayments();
       const aData = await fetchAttendance();
 
-      setWorkers(wData);
-      setExpenses(eData);
-      setPayments(pData);
-      setAttendance(aData);
+      const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+      const assignedIds = cropObj ? cropObj.workerIds || [] : [];
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+        ? wData 
+        : wData.filter(w => assignedIds.includes(w.id));
+
+      const filteredExpenses = filterByCrop(eData, selectedCropCycleId);
+      const filteredPayments = filterByCrop(pData, selectedCropCycleId);
+      const filteredAttendance = filterByCrop(aData, selectedCropCycleId);
+
+      setWorkers(filteredWorkers);
+      setExpenses(filteredExpenses);
+      setPayments(filteredPayments);
+      setAttendance(filteredAttendance);
     } catch (e) {
       showToast("Error compiling ledger reports", "error");
     } finally {
@@ -147,7 +163,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       if (a.status === 'half_day') return sum + 0.5;
       return sum;
     }, 0);
-    const earned = daysWorked * w.dailyWage;
+    const earned = workerAtt.reduce((sum, a) => {
+      const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
+      if (a.status === 'present') return sum + wage;
+      if (a.status === 'half_day') return sum + wage * 0.5;
+      return sum;
+    }, 0);
     const paid = filteredPayments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
     const pending = Math.max(0, earned - paid);
     return {
@@ -243,8 +264,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     }
     const worker = workers.find(w => w.id === a.workerId);
     if (worker) {
+      const wage = a.wageForDay !== undefined ? a.wageForDay : worker.dailyWage;
       const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
-      monthlyDataMap[month].Labor += weight * worker.dailyWage;
+      monthlyDataMap[month].Labor += weight * wage;
     }
   });
 
@@ -314,10 +336,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       if (reportType === 'all' || reportType === 'attendance') {
         const wsAttendanceData = filteredAttendance.map(a => {
           const worker = workers.find(w => w.id === a.workerId);
+          const wage = a.wageForDay !== undefined ? a.wageForDay : (worker ? worker.dailyWage : 0);
           return {
             'Worker Name': worker ? worker.name : 'Unknown',
             'Date': a.date,
-            'Status': a.status
+            'Status': a.status,
+            'Daily Wage (₹)': a.status === 'absent' ? 0 : wage,
+            'Work Type': a.workType || '',
+            'Notes': a.notes || ''
           };
         });
         const wsAttendance = XLSX.utils.json_to_sheet(wsAttendanceData);
@@ -441,13 +467,17 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         doc.setTextColor(46, 125, 50);
         doc.text(reportType === 'all' ? '4. Attendance Registry' : 'Attendance Registry', 14, nextStartY);
         
-        const attendanceHeaders = [['Worker Name', 'Date', 'Status']];
+        const attendanceHeaders = [['Worker Name', 'Date', 'Status', 'Daily Wage', 'Work Type', 'Notes']];
         const attendanceRows = filteredAttendance.map(a => {
           const worker = workers.find(w => w.id === a.workerId);
+          const wage = a.wageForDay !== undefined ? a.wageForDay : (worker ? worker.dailyWage : 0);
           return [
             worker ? worker.name : 'Unknown',
             a.date,
-            a.status
+            a.status,
+            a.status === 'absent' ? 'Rs. 0' : `Rs. ${wage}`,
+            a.workType || 'N/A',
+            a.notes || ''
           ];
         });
         

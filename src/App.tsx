@@ -12,7 +12,12 @@ import {
   Lock, 
   Mail, 
   Globe,
-  Sparkles
+  Sparkles,
+  ChevronDown,
+  Plus,
+  Check,
+  Calendar,
+  X
 } from 'lucide-react';
 import { 
   signInWithGoogle,
@@ -23,7 +28,11 @@ import {
   fetchWorkers,
   fetchPayments,
   fetchAttendance,
-  AttendanceRecord
+  AttendanceRecord,
+  CropCycle,
+  fetchCropCycles,
+  createCropCycle,
+  filterByCrop
 } from './firebase';
 import { t, subT, Language } from './utils/translation';
 
@@ -45,6 +54,29 @@ export default function App() {
   
   // Badge notification count state
   const [pendingWagesCount, setPendingWagesCount] = useState(0);
+  
+  // Crop Cycle States
+  const [selectedCropCycleId, setSelectedCropCycleId] = useState<string>(
+    () => localStorage.getItem('paramesh_selected_crop_cycle_id') || 'all'
+  );
+  const [cropCycles, setCropCycles] = useState<CropCycle[]>([]);
+  const [showNewCropModal, setShowNewCropModal] = useState(false);
+  const [isCropDropdownOpen, setIsCropDropdownOpen] = useState(false);
+
+  // New Crop Form States
+  const [newCropName, setNewCropName] = useState('');
+  const [newCropSeason, setNewCropSeason] = useState('');
+  const [newCropVariety, setNewCropVariety] = useState('');
+  const [newCropLandName, setNewCropLandName] = useState('');
+  const [newCropArea, setNewCropArea] = useState('');
+  const [newCropStartDate, setNewCropStartDate] = useState('');
+  const [newCropExpectedHarvestDate, setNewCropExpectedHarvestDate] = useState('');
+  const [newCropNotes, setNewCropNotes] = useState('');
+  const [copyWorkersFlag, setCopyWorkersFlag] = useState(true);
+  const [emptyAttendanceFlag, setEmptyAttendanceFlag] = useState(true);
+  const [emptyPaymentsFlag, setEmptyPaymentsFlag] = useState(true);
+  const [emptyExpensesFlag, setEmptyExpensesFlag] = useState(true);
+  const [savingCrop, setSavingCrop] = useState(false);
   
   // Toast notifications state
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -73,28 +105,48 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Update pending wages count whenever database changes or view swaps
+  const loadCropCycles = async () => {
+    try {
+      const list = await fetchCropCycles();
+      setCropCycles(list);
+    } catch (e) {
+      console.error("Error loading crop cycles:", e);
+    }
+  };
+
+  // Load Crop Cycles on login
+  useEffect(() => {
+    if (currentUser) {
+      loadCropCycles();
+    }
+  }, [currentUser]);
+
+  // Update pending wages count whenever database changes, view swaps, or crop selection changes
   useEffect(() => {
     if (currentUser) {
       updatePendingWagesCount();
     }
-  }, [currentView, currentUser]);
+  }, [currentView, currentUser, selectedCropCycleId]);
 
   const updatePendingWagesCount = async () => {
     try {
       const workersData = await fetchWorkers();
-      const paymentsData = await fetchPayments();
-      const allAttendance = await fetchAttendance();
+      let paymentsData = await fetchPayments();
+      let allAttendance = await fetchAttendance();
+
+      // Filter by active crop cycle
+      paymentsData = filterByCrop(paymentsData, selectedCropCycleId);
+      allAttendance = filterByCrop(allAttendance, selectedCropCycleId);
 
       let count = 0;
       workersData.forEach(w => {
         const workerAtt = allAttendance.filter(a => a.workerId === w.id);
-        const days = workerAtt.reduce((sum, a) => {
-          if (a.status === 'present') return sum + 1;
-          if (a.status === 'half_day') return sum + 0.5;
+        const earned = workerAtt.reduce((sum, a) => {
+          const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
+          if (a.status === 'present') return sum + wage;
+          if (a.status === 'half_day') return sum + wage * 0.5;
           return sum;
         }, 0);
-        const earned = days * w.dailyWage;
         const paid = paymentsData.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
         if (earned - paid > 0) {
           count++;
@@ -151,6 +203,70 @@ export default function App() {
     }
   };
 
+  const handleCreateCropCycle = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!newCropName.trim() || !newCropSeason.trim() || !newCropStartDate.trim() || !newCropExpectedHarvestDate.trim()) {
+      showToast("Please fill in all required fields", "error");
+      return;
+    }
+
+    // Validation 1: Date check
+    if (new Date(newCropStartDate) > new Date(newCropExpectedHarvestDate)) {
+      showToast(t('validationCropDates', lang), "error");
+      return;
+    }
+
+    // Validation 2: Duplicate check
+    const duplicate = cropCycles.find(
+      c => c.cropName.trim().toLowerCase() === newCropName.trim().toLowerCase() &&
+           c.season.trim().toLowerCase() === newCropSeason.trim().toLowerCase() &&
+           c.status === 'active'
+    );
+    if (duplicate) {
+      showToast(t('validationDuplicateCrop', lang), "error");
+      return;
+    }
+
+    setSavingCrop(true);
+    try {
+      let workerIds: string[] = [];
+      if (copyWorkersFlag) {
+        const workers = await fetchWorkers();
+        workerIds = workers.filter(w => w.status === 'active').map(w => w.id);
+      }
+
+      const newCycle: Omit<CropCycle, 'id' | 'createdAt'> = {
+        cropName: newCropName.trim(),
+        season: newCropSeason.trim(),
+        variety: newCropVariety.trim(),
+        landName: newCropLandName.trim(),
+        area: newCropArea.trim(),
+        startDate: newCropStartDate,
+        expectedHarvestDate: newCropExpectedHarvestDate,
+        status: 'active',
+        notes: newCropNotes.trim(),
+        workerIds
+      };
+
+      const newId = await createCropCycle(newCycle);
+      showToast("Crop cycle created successfully!", "success");
+      
+      // Refresh list
+      await loadCropCycles();
+      // Select the new crop automatically
+      setSelectedCropCycleId(newId);
+      localStorage.setItem('paramesh_selected_crop_cycle_id', newId);
+      
+      setShowNewCropModal(false);
+    } catch (err: any) {
+      console.error(err);
+      showToast("Failed to create crop cycle", "error");
+    } finally {
+      setSavingCrop(false);
+    }
+  };
+
   const handleGoogleLogin = async () => {
     setAuthLoading(true);
     try {
@@ -198,6 +314,8 @@ export default function App() {
             bilingual={bilingual}
             onNavigate={handleNavigateView}
             showToast={showToast}
+            selectedCropCycleId={selectedCropCycleId}
+            cropCycles={cropCycles}
           />
         );
       case 'workers':
@@ -206,6 +324,9 @@ export default function App() {
             lang={lang}
             bilingual={bilingual}
             showToast={showToast}
+            selectedCropCycleId={selectedCropCycleId}
+            cropCycles={cropCycles}
+            onRefreshCropCycles={loadCropCycles}
           />
         );
       case 'attendance':
@@ -214,6 +335,8 @@ export default function App() {
             lang={lang}
             bilingual={bilingual}
             showToast={showToast}
+            selectedCropCycleId={selectedCropCycleId}
+            cropCycles={cropCycles}
           />
         );
       case 'payments':
@@ -222,6 +345,8 @@ export default function App() {
             lang={lang}
             bilingual={bilingual}
             showToast={showToast}
+            selectedCropCycleId={selectedCropCycleId}
+            cropCycles={cropCycles}
           />
         );
       case 'expenses':
@@ -230,6 +355,8 @@ export default function App() {
             lang={lang}
             bilingual={bilingual}
             showToast={showToast}
+            selectedCropCycleId={selectedCropCycleId}
+            cropCycles={cropCycles}
           />
         );
       case 'reports':
@@ -238,6 +365,8 @@ export default function App() {
             lang={lang}
             bilingual={bilingual}
             showToast={showToast}
+            selectedCropCycleId={selectedCropCycleId}
+            cropCycles={cropCycles}
           />
         );
       case 'profile':
@@ -434,31 +563,135 @@ export default function App() {
             className="flex-1 flex flex-col justify-between min-h-screen relative"
           >
             {/* Header */}
-            <header className="sticky top-0 left-0 right-0 z-50 glass-header px-4 py-3.5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-primary/10 text-primary rounded-xl flex items-center justify-center">
-                  <Sprout size={18} />
+            <header className="sticky top-0 left-0 right-0 z-50 glass-header px-4 py-2 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 bg-primary/10 text-primary rounded-xl flex items-center justify-center">
+                    <Sprout size={18} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider block">
+                      Paramesh AgriBook
+                    </span>
+                    <span className="text-sm font-extrabold text-text-dark block leading-none">
+                      {bilingual 
+                        ? `${t(getHeaderTitle(), lang)} / ${subT(getHeaderTitle(), lang)}` 
+                        : t(getHeaderTitle(), lang)
+                      }
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-[10px] text-gray-400 font-extrabold uppercase tracking-wider block">
-                    Paramesh AgriBook
-                  </span>
-                  <span className="text-sm font-extrabold text-text-dark block leading-none">
-                    {bilingual 
-                      ? `${t(getHeaderTitle(), lang)} / ${subT(getHeaderTitle(), lang)}` 
-                      : t(getHeaderTitle(), lang)
-                    }
-                  </span>
-                </div>
+
+                <button
+                  onClick={() => handleLanguageChange(lang === 'en' ? 'te' : 'en')}
+                  className="px-3 py-1.5 bg-primary/15 text-primary text-xs font-bold rounded-xl active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
+                >
+                  <Globe size={12} />
+                  {lang === 'en' ? 'తెలుగు' : 'English'}
+                </button>
               </div>
 
-              <button
-                onClick={() => handleLanguageChange(lang === 'en' ? 'te' : 'en')}
-                className="px-3 py-1.5 bg-primary/15 text-primary text-xs font-bold rounded-xl active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
-              >
-                <Globe size={12} />
-                {lang === 'en' ? 'తెలుగు' : 'English'}
-              </button>
+              {/* Crop Selector Bar */}
+              <div className="relative">
+                <button
+                  onClick={() => setIsCropDropdownOpen(!isCropDropdownOpen)}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-[#F8F5E9]/80 border border-[#E0DBC5]/50 text-text-dark font-bold text-xs rounded-xl active:scale-[0.99] transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-gray-400 font-semibold">{t('currentCrop', lang)}:</span>
+                    <span className="text-primary truncate">
+                      {selectedCropCycleId === 'all' 
+                        ? t('allCrops', lang) 
+                        : selectedCropCycleId === 'legacy'
+                          ? t('legacyRecords', lang)
+                          : cropCycles.find(c => c.id === selectedCropCycleId)?.cropName || 'All Crops'
+                      }
+                    </span>
+                  </div>
+                  <ChevronDown size={14} className={`text-gray-400 transition-transform ${isCropDropdownOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {/* Crop Dropdown Menu */}
+                <AnimatePresence>
+                  {isCropDropdownOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -5 }}
+                      className="absolute left-0 right-0 mt-1 bg-white border border-[#E0DBC5]/60 rounded-xl shadow-premium z-50 overflow-hidden"
+                    >
+                      <div className="max-h-60 overflow-y-auto py-1">
+                        <button
+                          onClick={() => {
+                            setSelectedCropCycleId('all');
+                            localStorage.setItem('paramesh_selected_crop_cycle_id', 'all');
+                            setIsCropDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === 'all' ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
+                        >
+                          <span>{t('allCrops', lang)}</span>
+                          {selectedCropCycleId === 'all' && <Check size={12} className="text-primary" />}
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            setSelectedCropCycleId('legacy');
+                            localStorage.setItem('paramesh_selected_crop_cycle_id', 'legacy');
+                            setIsCropDropdownOpen(false);
+                          }}
+                          className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === 'legacy' ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
+                        >
+                          <span>{t('legacyRecords', lang)}</span>
+                          {selectedCropCycleId === 'legacy' && <Check size={12} className="text-primary" />}
+                        </button>
+
+                        {cropCycles.map(crop => (
+                          <button
+                            key={crop.id}
+                            onClick={() => {
+                              setSelectedCropCycleId(crop.id);
+                              localStorage.setItem('paramesh_selected_crop_cycle_id', crop.id);
+                              setIsCropDropdownOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === crop.id ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <span className="block font-bold truncate">{crop.cropName}</span>
+                              <span className="block text-[9px] text-gray-400 font-semibold">{crop.season} • {crop.area}</span>
+                            </div>
+                            {selectedCropCycleId === crop.id && <Check size={12} className="text-primary" />}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="border-t border-gray-100 p-1">
+                        <button
+                          onClick={() => {
+                            setIsCropDropdownOpen(false);
+                            setNewCropName('');
+                            setNewCropSeason('');
+                            setNewCropVariety('');
+                            setNewCropLandName('');
+                            setNewCropArea('');
+                            setNewCropStartDate('');
+                            setNewCropExpectedHarvestDate('');
+                            setNewCropNotes('');
+                            setCopyWorkersFlag(true);
+                            setEmptyAttendanceFlag(true);
+                            setEmptyPaymentsFlag(true);
+                            setEmptyExpensesFlag(true);
+                            setShowNewCropModal(true);
+                          }}
+                          className="w-full py-2 bg-primary/10 text-primary font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 hover:bg-primary/15 transition-all cursor-pointer"
+                        >
+                          <Plus size={12} />
+                          {t('addCropCycle', lang)}
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </header>
 
             {/* Content Area */}
@@ -574,6 +807,197 @@ export default function App() {
               </button>
             </nav>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* New Crop Modal */}
+      <AnimatePresence>
+        {showNewCropModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white w-full max-w-md rounded-3xl p-6 shadow-premium relative border border-[#E0DBC5] max-h-[90vh] overflow-y-auto no-scrollbar"
+            >
+              <button 
+                onClick={() => setShowNewCropModal(false)}
+                className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-lg font-bold text-text-dark mb-1 flex items-center gap-2">
+                <Sprout className="text-primary" size={20} />
+                {t('addCropCycle', lang)}
+              </h3>
+              <p className="text-xs text-gray-400 font-semibold mb-5">
+                Create a new crop cycle to organize workers, attendance, and expenses.
+              </p>
+
+              <form onSubmit={handleCreateCropCycle} className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1 col-span-2">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('cropName', lang)} *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newCropName}
+                      onChange={(e) => setNewCropName(e.target.value)}
+                      placeholder="e.g. Tomato, Paddy, Cotton"
+                      className="form-input text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('variety', lang)}</label>
+                    <input
+                      type="text"
+                      value={newCropVariety}
+                      onChange={(e) => setNewCropVariety(e.target.value)}
+                      placeholder="e.g. US 440, Hybrid"
+                      className="form-input text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('season', lang)} *</label>
+                    <input
+                      type="text"
+                      required
+                      value={newCropSeason}
+                      onChange={(e) => setNewCropSeason(e.target.value)}
+                      placeholder="e.g. Kharif 2026, Rabi"
+                      className="form-input text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('landName', lang)}</label>
+                    <input
+                      type="text"
+                      value={newCropLandName}
+                      onChange={(e) => setNewCropLandName(e.target.value)}
+                      placeholder="e.g. West Field"
+                      className="form-input text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('area', lang)}</label>
+                    <input
+                      type="text"
+                      value={newCropArea}
+                      onChange={(e) => setNewCropArea(e.target.value)}
+                      placeholder="e.g. 5 Acres"
+                      className="form-input text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('startDate', lang)} *</label>
+                    <input
+                      type="date"
+                      required
+                      value={newCropStartDate}
+                      onChange={(e) => setNewCropStartDate(e.target.value)}
+                      className="form-input text-xs"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('expectedHarvestDate', lang)} *</label>
+                    <input
+                      type="date"
+                      required
+                      value={newCropExpectedHarvestDate}
+                      onChange={(e) => setNewCropExpectedHarvestDate(e.target.value)}
+                      className="form-input text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('notes', lang)}</label>
+                  <textarea
+                    value={newCropNotes}
+                    onChange={(e) => setNewCropNotes(e.target.value)}
+                    placeholder="Any notes..."
+                    rows={2}
+                    className="form-input text-xs"
+                  />
+                </div>
+
+                {/* Checkboxes */}
+                <div className="space-y-2 pt-2 border-t border-gray-100">
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
+                    <input
+                      type="checkbox"
+                      checked={copyWorkersFlag}
+                      onChange={(e) => setCopyWorkersFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4"
+                    />
+                    <span>{t('copyWorkers', lang)}</span>
+                  </label>
+                  
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
+                    <input
+                      type="checkbox"
+                      disabled
+                      checked={emptyAttendanceFlag}
+                      onChange={(e) => setEmptyAttendanceFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4 bg-gray-100"
+                    />
+                    <span className="text-gray-400">{t('startEmptyAttendance', lang)}</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
+                    <input
+                      type="checkbox"
+                      disabled
+                      checked={emptyPaymentsFlag}
+                      onChange={(e) => setEmptyPaymentsFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4 bg-gray-100"
+                    />
+                    <span className="text-gray-400">{t('startEmptyPayments', lang)}</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
+                    <input
+                      type="checkbox"
+                      disabled
+                      checked={emptyExpensesFlag}
+                      onChange={(e) => setEmptyExpensesFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4 bg-gray-100"
+                    />
+                    <span className="text-gray-400">{t('startEmptyExpenses', lang)}</span>
+                  </label>
+                </div>
+
+                {/* Buttons */}
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowNewCropModal(false)}
+                    className="flex-1 py-3.5 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 text-xs transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingCrop}
+                    className="flex-1 py-3.5 bg-primary text-white font-bold rounded-2xl active:scale-95 shadow-soft text-xs transition-all flex items-center justify-center gap-1.5"
+                  >
+                    {savingCrop ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      t('save', lang)
+                    )}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

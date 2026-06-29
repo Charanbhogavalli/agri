@@ -45,6 +45,10 @@ export interface AttendanceRecord {
   workerId: string;
   date: string; // YYYY-MM-DD
   status: 'present' | 'absent' | 'half_day';
+  wageForDay?: number;
+  workType?: string;
+  notes?: string;
+  cropCycleId?: string;
   createdAt?: string;
 }
 
@@ -56,6 +60,7 @@ export interface Payment {
   amount: number;
   date: string; // YYYY-MM-DD
   note: string;
+  cropCycleId?: string;
   createdAt: string;
 }
 
@@ -68,6 +73,25 @@ export interface Expense {
   description: string;
   notes: string;
   date: string; // YYYY-MM-DD;
+  cropCycleId?: string;
+  createdAt: string;
+}
+
+export interface CropCycle {
+  id: string;
+  cropName: string;
+  variety: string;
+  season: string;
+  landName: string;
+  area: string;
+  startDate: string;
+  expectedHarvestDate: string;
+  actualHarvestDate?: string;
+  status: 'active' | 'completed';
+  notes: string;
+  ownerId?: string;
+  ownerEmail?: string;
+  workerIds: string[];
   createdAt: string;
 }
 
@@ -152,6 +176,9 @@ const initializeLocalStorage = () => {
   if (!localStorage.getItem('paramesh_attendance')) {
     localStorage.setItem('paramesh_attendance', JSON.stringify([]));
   }
+  if (!localStorage.getItem('paramesh_crop_cycles')) {
+    localStorage.setItem('paramesh_crop_cycles', JSON.stringify([]));
+  }
 };
 
 initializeLocalStorage();
@@ -162,6 +189,7 @@ export const resetMockData = () => {
   localStorage.setItem('paramesh_expenses', JSON.stringify([]));
   localStorage.setItem('paramesh_payments', JSON.stringify([]));
   localStorage.setItem('paramesh_attendance', JSON.stringify([]));
+  localStorage.setItem('paramesh_crop_cycles', JSON.stringify([]));
   localStorage.removeItem('paramesh_weekly_emails');
 };
 
@@ -173,6 +201,7 @@ export const clearAllDatabaseData = async (): Promise<void> => {
     localStorage.setItem('paramesh_expenses', JSON.stringify([]));
     localStorage.setItem('paramesh_payments', JSON.stringify([]));
     localStorage.setItem('paramesh_attendance', JSON.stringify([]));
+    localStorage.setItem('paramesh_crop_cycles', JSON.stringify([]));
     localStorage.removeItem('paramesh_weekly_emails');
     return;
   }
@@ -194,7 +223,8 @@ export const clearAllDatabaseData = async (): Promise<void> => {
     deleteCollectionDocs('workers'),
     deleteCollectionDocs('expenses'),
     deleteCollectionDocs('payments'),
-    deleteCollectionDocs('attendance')
+    deleteCollectionDocs('attendance'),
+    deleteCollectionDocs('cropCycles')
   ]);
 };
 
@@ -205,6 +235,12 @@ const getMockData = (key: string): any[] => {
 
 const setMockData = (key: string, data: any[]) => {
   localStorage.setItem(key, JSON.stringify(data));
+};
+
+export const filterByCrop = <T extends { cropCycleId?: string }>(items: T[], cropId: string): T[] => {
+  if (!cropId || cropId === 'all') return items;
+  if (cropId === 'legacy') return items.filter(item => !item.cropCycleId);
+  return items.filter(item => item.cropCycleId === cropId);
 };
 
 // ----------------------------------------------------
@@ -477,11 +513,71 @@ export const editAttendance = async (id: string, record: Partial<AttendanceRecor
 export const removeAttendance = async (id: string): Promise<void> => {
   if (isMockMode) {
     const att = getMockData('paramesh_attendance');
-    const updated = att.filter((a: any) => a.id !== id);
+    const updated = att.filter((a: any) => 
+      a.id !== id && 
+      a.id !== `att_${id}` && 
+      !(id.includes('_') && a.workerId === id.replace('att_', '').split('_')[0] && a.date === id.replace('att_', '').split('_')[1])
+    );
     setMockData('paramesh_attendance', updated);
     return;
   }
-  await deleteDoc(doc(db, 'attendance', id));
+  const docId = id.startsWith('att_') ? id.replace('att_', '') : id;
+  await deleteDoc(doc(db, 'attendance', docId));
+};
+
+// Crop Cycles CRUD
+export const fetchCropCycles = async (): Promise<CropCycle[]> => {
+  const uid = getCurrentUserId();
+  if (isMockMode) {
+    return getMockData('paramesh_crop_cycles').filter((c: any) => c.ownerId === uid);
+  }
+  const q = query(collection(db, 'cropCycles'), where('ownerId', '==', uid));
+  const querySnapshot = await getDocs(q);
+  const cycles: CropCycle[] = [];
+  querySnapshot.forEach((doc) => {
+    cycles.push({ id: doc.id, ...doc.data() } as CropCycle);
+  });
+  return cycles;
+};
+
+export const createCropCycle = async (cropCycle: Omit<CropCycle, 'id' | 'createdAt'>): Promise<string> => {
+  const createdAt = new Date().toISOString();
+  const uid = getCurrentUserId();
+  const email = getCurrentUserEmail();
+  if (isMockMode) {
+    const cycles = getMockData('paramesh_crop_cycles');
+    const newId = 'c_' + Math.random().toString(36).substr(2, 9);
+    const newCycle = { id: newId, ...cropCycle, createdAt, ownerId: uid, ownerEmail: email } as any;
+    cycles.push(newCycle);
+    setMockData('paramesh_crop_cycles', cycles);
+    return newId;
+  }
+  const docRef = await addDoc(collection(db, 'cropCycles'), { ...cropCycle, createdAt, ownerId: uid, ownerEmail: email });
+  return docRef.id;
+};
+
+export const editCropCycle = async (id: string, cropCycle: Partial<CropCycle>): Promise<void> => {
+  if (isMockMode) {
+    const cycles = getMockData('paramesh_crop_cycles');
+    const index = cycles.findIndex(c => c.id === id);
+    if (index !== -1) {
+      cycles[index] = { ...cycles[index], ...cropCycle };
+      setMockData('paramesh_crop_cycles', cycles);
+    }
+    return;
+  }
+  const docRef = doc(db, 'cropCycles', id);
+  await updateDoc(docRef, cropCycle as DocumentData);
+};
+
+export const removeCropCycle = async (id: string): Promise<void> => {
+  if (isMockMode) {
+    const cycles = getMockData('paramesh_crop_cycles');
+    const updated = cycles.filter(c => c.id !== id);
+    setMockData('paramesh_crop_cycles', updated);
+    return;
+  }
+  await deleteDoc(doc(db, 'cropCycles', id));
 };
 
 // Email Recipients Firestore Helpers
