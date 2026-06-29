@@ -1,4 +1,5 @@
 import { Worker, AttendanceRecord, Payment, Expense } from '../firebase';
+import { getLocalDateString } from '../utils/date';
 
 export interface WeeklyReportData {
   weekRange: string; // e.g., "15 June 2026 - 21 June 2026"
@@ -52,15 +53,15 @@ export const calculateWeeklyReport = (
   targetSundayDate: string // YYYY-MM-DD
 ): WeeklyReportData => {
   // Get date range (Monday to Sunday)
-  const sunday = new Date(targetSundayDate);
-  const monday = new Date(sunday);
-  monday.setDate(sunday.getDate() - 6);
+  const [year, month, day] = targetSundayDate.split('-').map(Number);
+  const sunday = new Date(year, month - 1, day);
+  const monday = new Date(year, month - 1, day - 6);
 
   const formatOptions: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
   const weekRange = `${monday.toLocaleDateString('en-US', formatOptions)} - ${sunday.toLocaleDateString('en-US', formatOptions)}`;
 
-  const mondayStr = monday.toISOString().split('T')[0];
-  const sundayStr = sunday.toISOString().split('T')[0];
+  const mondayStr = getLocalDateString(monday);
+  const sundayStr = targetSundayDate;
 
   // Filter lists for the week
   const weekAttendance = attendance.filter(a => a.date >= mondayStr && a.date <= sundayStr);

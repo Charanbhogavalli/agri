@@ -9,8 +9,11 @@ import {
   Info,
   Database,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Key,
+  X
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { logoutUser, isMockMode, resetMockData, clearAllDatabaseData, fetchEmailRecipients, saveEmailRecipients } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 
@@ -23,6 +26,42 @@ interface ProfileViewProps {
   showToast: (message: string, type: 'success' | 'error') => void;
   currentUser: { displayName: string; email: string } | null;
 }
+
+// Email Draft Preview Modal
+const EmailPreviewModal: React.FC<{ html: string | null; onClose: () => void }> = ({ html, onClose }) => {
+  return (
+    <AnimatePresence>
+      {html && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="bg-white w-full max-w-2xl h-[80vh] rounded-3xl p-6 shadow-premium relative flex flex-col gap-4 border border-[#E0DBC5]"
+          >
+            <div className="flex justify-between items-center shrink-0">
+              <h3 className="text-lg font-bold text-text-dark">Email Draft Preview</h3>
+              <button 
+                onClick={onClose}
+                className="p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 border border-[#E0DBC5]/50 rounded-2xl overflow-hidden bg-white">
+              <iframe 
+                srcDoc={html} 
+                title="Email HTML Preview" 
+                className="w-full h-full border-none"
+              />
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+};
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
   lang,
@@ -39,6 +78,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [adminEmail, setAdminEmail] = React.useState('');
   const [senderEmail, setSenderEmail] = React.useState('onboarding@resend.dev');
 
+  // API Keys configurations
+  const [geminiKey, setGeminiKey] = React.useState('');
+  const [resendKey, setResendKey] = React.useState('');
+
+  // Weekly email logs
+  interface EmailLog {
+    date: string;
+    weekRange: string;
+    recipients: string[];
+    html: string;
+    success: boolean;
+    simulated?: boolean;
+  }
+  const [emailLogs, setEmailLogs] = React.useState<EmailLog[]>([]);
+  const [selectedLogHtml, setSelectedLogHtml] = React.useState<string | null>(null);
+
   React.useEffect(() => {
     loadSettings();
   }, []);
@@ -47,15 +102,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     const settingsStr = localStorage.getItem('paramesh_settings');
     let admin = '';
     let sender = 'onboarding@resend.dev';
+    let gKey = '';
+    let rKey = '';
     if (settingsStr) {
       try {
         const parsed = JSON.parse(settingsStr);
         admin = parsed.adminEmail || '';
         sender = parsed.senderEmail || 'onboarding@resend.dev';
+        gKey = parsed.geminiKey || '';
+        rKey = parsed.resendKey || '';
       } catch (e) {}
     }
     setAdminEmail(admin);
     setSenderEmail(sender);
+    setGeminiKey(gKey);
+    setResendKey(rKey);
+
+    const logs = JSON.parse(localStorage.getItem('paramesh_weekly_emails') || '[]');
+    setEmailLogs(logs);
 
     try {
       const dbRecipients = await fetchEmailRecipients();
@@ -101,6 +165,29 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       showToast("Recipients updated successfully!", "success");
     } catch (e) {
       showToast("Failed to save recipients", "error");
+    }
+  };
+
+  const handleSaveApiKeys = async () => {
+    try {
+      const savedSettings = localStorage.getItem('paramesh_settings');
+      let parsedSettings = {};
+      if (savedSettings) {
+        try {
+          parsedSettings = JSON.parse(savedSettings);
+        } catch (e) {}
+      }
+
+      const updated = {
+        ...parsedSettings,
+        geminiKey: geminiKey.trim(),
+        resendKey: resendKey.trim()
+      };
+
+      localStorage.setItem('paramesh_settings', JSON.stringify(updated));
+      showToast("API keys updated successfully!", "success");
+    } catch (e) {
+      showToast("Failed to save API keys", "error");
     }
   };
 
@@ -223,6 +310,52 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
       </div>
 
+      {/* API Key Configurations */}
+      <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
+          <Key size={14} className="text-gray-400" />
+          {bilingual ? 'API Configuration / API కాన్ఫిగరేషన్' : 'API Configuration'}
+        </h3>
+
+        <div className="space-y-3">
+          {/* Gemini Key */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">
+              {t('geminiKeyTitle', lang)}
+            </label>
+            <input
+              type="password"
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+              placeholder="Enter Gemini API Key"
+              className="form-input"
+            />
+          </div>
+
+          {/* Resend Key */}
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">
+              {t('resendKeyTitle', lang)}
+            </label>
+            <input
+              type="password"
+              value={resendKey}
+              onChange={(e) => setResendKey(e.target.value)}
+              placeholder="Enter Resend API Key"
+              className="form-input"
+            />
+          </div>
+
+          <button
+            onClick={handleSaveApiKeys}
+            className="w-full py-3.5 bg-primary text-white font-bold rounded-2xl active:scale-95 shadow-soft text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 mt-2"
+          >
+            <Save size={16} />
+            Save API Keys
+          </button>
+        </div>
+      </div>
+
       {/* Weekly Email Recipients */}
       <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
@@ -283,6 +416,52 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
       </div>
 
+      {/* Reports Sent Log */}
+      <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
+          <Mail size={14} className="text-gray-400" />
+          {bilingual ? 'Reports Sent / పంపిన నివేదికలు' : 'Reports Sent Log'}
+        </h3>
+
+        {emailLogs.length === 0 ? (
+          <p className="text-xs text-gray-400 pl-1">No reports sent yet.</p>
+        ) : (
+          <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+            {emailLogs.map((log, idx) => (
+              <div 
+                key={idx}
+                className="p-3 bg-[#F8F5E9]/50 border border-[#E0DBC5]/30 rounded-2xl flex items-center justify-between text-xs gap-3"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-text-dark truncate block leading-tight">
+                      {log.weekRange}
+                    </span>
+                    <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded-md ${
+                      log.success 
+                        ? 'bg-success-green/10 text-success-green' 
+                        : 'bg-danger-red/10 text-danger-red'
+                    }`}>
+                      {log.success ? (log.simulated ? 'Simulated' : 'Sent') : 'Failed'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-gray-400 font-semibold block mt-1">
+                    To: {log.recipients.join(', ')} • {new Date(log.date).toLocaleDateString()}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedLogHtml(log.html)}
+                  className="px-2.5 py-1.5 bg-primary/10 text-primary font-bold text-[10px] rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  View Draft
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* About Section */}
       <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-2">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
@@ -319,6 +498,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           {t('logout', lang)}
         </button>
       </div>
+
+      {/* Modal Draft Preview */}
+      <EmailPreviewModal html={selectedLogHtml} onClose={() => setSelectedLogHtml(null)} />
     </div>
   );
 };

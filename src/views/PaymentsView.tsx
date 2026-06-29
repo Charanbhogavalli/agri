@@ -29,6 +29,7 @@ import {
   filterByCrop
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
+import { getLocalDateString } from '../utils/date';
 
 interface PaymentsViewProps {
   lang: Language;
@@ -73,7 +74,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
 
   // Form Fields
   const [amount, setAmount] = useState('');
-  const [date, setDate] = useState('2026-06-23'); // Target system date
+  const [date, setDate] = useState(getLocalDateString()); // Target system date
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -153,7 +154,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
   const openAddPaymentModal = (summary: WorkerPaymentSummary) => {
     setActiveSummary(summary);
     setAmount(summary.pendingAmount > 0 ? summary.pendingAmount.toString() : '');
-    setDate('2026-06-23');
+    setDate(getLocalDateString());
     setNote('');
     setShowAddModal(true);
   };

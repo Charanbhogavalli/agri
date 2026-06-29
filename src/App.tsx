@@ -316,6 +316,7 @@ export default function App() {
             showToast={showToast}
             selectedCropCycleId={selectedCropCycleId}
             cropCycles={cropCycles}
+            onRefreshCropCycles={loadCropCycles}
           />
         );
       case 'workers':

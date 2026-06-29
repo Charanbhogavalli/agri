@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Worker, Expense, Payment, AttendanceRecord } from '../firebase';
+import { getLocalDateString } from '../utils/date';
 
 // Helper to get Gemini API key
 export const getGeminiApiKey = (): string => {
@@ -34,8 +35,8 @@ const mockParseText = (text: string, workers: Worker[]): ParsedTransaction => {
   const amountMatch = lowerText.match(/\d+/);
   const amount = amountMatch ? parseInt(amountMatch[0], 10) : 0;
   
-  // Date default to today (2026-06-23)
-  const todayStr = '2026-06-23';
+  // Date default to today
+  const todayStr = getLocalDateString();
 
   // Check if it is a payment (contains "paid" or "pay" or "wages" to a worker)
   const isPayment = lowerText.includes('paid') || lowerText.includes('pay') || lowerText.includes('gave') || lowerText.includes('wages');
@@ -108,9 +109,14 @@ export const parseNaturalLanguage = async (
     });
 
     const workersInfo = workers.map(w => `{ id: "${w.id}", name: "${w.name}" }`).join(', ');
+    const today = new Date();
+    const weekday = today.toLocaleDateString('en-US', { weekday: 'long' });
+    const monthDayYear = today.toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' });
+    const todayStr = getLocalDateString(today);
+
     const systemPrompt = `You are a smart parser for a farm ledger app. 
 Parse the user's text and extract transaction details.
-Today is Tuesday, June 23, 2026.
+Today is ${weekday}, ${monthDayYear}.
  
 Available Workers in system: [${workersInfo}]
 Allowed Expense Categories: [Labor, Seeds, Fertilizer, Diesel, Tractor, Transport, Equipment, Others]
@@ -122,7 +128,7 @@ Return JSON in this EXACT schema:
   "workerName": "matched_worker_name" | null,
   "category": "one_of_allowed_categories" | null,
   "amount": number,
-  "date": "YYYY-MM-DD" (use today's date 2026-06-23 if date is not specified),
+  "date": "YYYY-MM-DD" (use today's date ${todayStr} if date is not specified),
   "description": "Short clean description of the transaction"
 }
 

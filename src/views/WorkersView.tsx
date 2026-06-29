@@ -17,6 +17,7 @@ import {
   editCropCycle
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
+import { getLocalDateString } from '../utils/date';
 
 interface WorkersViewProps {
   lang: Language;
@@ -62,7 +63,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
 
   // Payment Form fields
   const [payAmount, setPayAmount] = useState('');
-  const [payDate, setPayDate] = useState('2026-06-23');
+  const [payDate, setPayDate] = useState(getLocalDateString());
   const [payNote, setPayNote] = useState('');
   const [savingPayment, setSavingPayment] = useState(false);
 
@@ -124,7 +125,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
   const openPayDirectModal = (worker: Worker, pending: number) => {
     setActiveWorkerForPay({ worker, pending });
     setPayAmount(pending > 0 ? pending.toString() : '');
-    setPayDate('2026-06-23');
+    setPayDate(getLocalDateString());
     setPayNote('');
     setShowPayModal(true);
   };

@@ -368,7 +368,7 @@ export const saveAttendanceList = async (date: string, records: Omit<AttendanceR
       const docId = `att_${r.workerId}_${date}`;
       const index = att.findIndex((a: any) => a.id === docId || (a.workerId === r.workerId && a.date === date));
       if (index !== -1) {
-        att[index] = { ...att[index], status: r.status };
+        att[index] = { ...att[index], ...r };
       } else {
         att.push({ ...r, id: docId, ownerId: uid, ownerEmail: email });
       }

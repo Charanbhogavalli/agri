@@ -14,7 +14,8 @@ import {
   X,
   Award,
   Calendar,
-  Flame
+  Flame,
+  Archive
 } from 'lucide-react';
 import { 
   Worker, 
@@ -29,11 +30,13 @@ import {
   createPayment,
   createExpense,
   CropCycle,
-  filterByCrop
+  filterByCrop,
+  editCropCycle
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import { parseNaturalLanguage, getInsightsList, AIObservation, ParsedTransaction } from '../services/gemini';
 import { calculateWeeklyReport, sendWeeklyReport } from '../services/resend';
+import { getLocalDateString } from '../utils/date';
 
 interface DashboardViewProps {
   lang: Language;
@@ -42,14 +45,9 @@ interface DashboardViewProps {
   showToast: (message: string, type: 'success' | 'error') => void;
   selectedCropCycleId: string;
   cropCycles: CropCycle[];
+  onRefreshCropCycles?: () => Promise<void>;
 }
 
-const getLocalDateString = (d: Date = new Date()) => {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
 
 const getLocalMonthString = (d: Date = new Date()) => {
   const year = d.getFullYear();
@@ -60,15 +58,14 @@ const getLocalMonthString = (d: Date = new Date()) => {
 const getPreviousSundayDate = (d: Date = new Date()): string => {
   const day = d.getDay();
   const diff = day === 0 ? 7 : day;
-  const prevSunday = new Date(d);
-  prevSunday.setDate(d.getDate() - diff);
-  return prevSunday.toISOString().split('T')[0];
+  const prevSunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - diff);
+  return getLocalDateString(prevSunday);
 };
 
 const getWeekRange = (sundayDateStr: string) => {
-  const sunday = new Date(sundayDateStr);
-  const monday = new Date(sunday);
-  monday.setDate(sunday.getDate() - 6);
+  const [year, month, day] = sundayDateStr.split('-').map(Number);
+  const sunday = new Date(year, month - 1, day);
+  const monday = new Date(year, month - 1, day - 6);
   const formatOptions: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
   return `${monday.toLocaleDateString('en-US', formatOptions)} - ${sunday.toLocaleDateString('en-US', formatOptions)}`;
 };
@@ -79,7 +76,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onNavigate,
   showToast,
   selectedCropCycleId,
-  cropCycles
+  cropCycles,
+  onRefreshCropCycles
 }) => {
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -332,6 +330,80 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {bilingual ? `${t('tagline', lang)} | ${subT('tagline', lang)}` : t('tagline', lang)}
         </p>
       </div>
+
+      {/* Active Crop Cycle Info Card */}
+      {selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' && (() => {
+        const crop = cropCycles.find(c => c.id === selectedCropCycleId);
+        if (!crop) return null;
+        
+        return (
+          <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/45 shadow-soft space-y-3">
+            <div className="flex justify-between items-start gap-4">
+              <div className="min-w-0">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">
+                  {bilingual ? 'Crop Cycle Details / పంట వివరాలు' : 'Crop Cycle Details'}
+                </span>
+                <h2 className="text-lg font-black text-text-dark mt-0.5 truncate">
+                  {crop.cropName} ({crop.season})
+                </h2>
+                <p className="text-xs text-gray-400 font-semibold mt-1">
+                  Variety: {crop.variety || 'N/A'} • Land: {crop.landName || 'N/A'} ({crop.area || '0'} acres)
+                </p>
+              </div>
+              <span className={`text-[9px] font-extrabold uppercase px-2.5 py-1 rounded-md shrink-0 ${
+                crop.status === 'completed' 
+                  ? 'bg-gray-100 text-gray-400' 
+                  : 'bg-primary/10 text-primary animate-pulse'
+              }`}>
+                {crop.status === 'completed' ? 'Completed / ముగిసింది' : 'Active / సాగులో ఉంది'}
+              </span>
+            </div>
+
+            <div className="pt-2.5 border-t border-[#E0DBC5]/30 flex items-center justify-between text-xs font-semibold text-gray-400">
+              <div>
+                Start: {new Date(crop.startDate).toLocaleDateString()}
+              </div>
+              {crop.status === 'completed' ? (
+                <div className="text-success-green font-bold">
+                  Harvested: {crop.actualHarvestDate ? new Date(crop.actualHarvestDate).toLocaleDateString() : 'N/A'}
+                </div>
+              ) : (
+                <div>
+                  Est. Harvest: {new Date(crop.expectedHarvestDate).toLocaleDateString()}
+                </div>
+              )}
+            </div>
+
+            {crop.status !== 'completed' && (
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (window.confirm(`Are you sure you want to mark "${crop.cropName} (${crop.season})" as completed? This will archive the crop cycle.`)) {
+                      try {
+                        await editCropCycle(crop.id, { 
+                          status: 'completed', 
+                          actualHarvestDate: getLocalDateString() 
+                        });
+                        showToast("Crop cycle marked as completed!", "success");
+                        if (onRefreshCropCycles) {
+                          await onRefreshCropCycles();
+                        }
+                      } catch (e) {
+                        showToast("Failed to archive crop cycle", "error");
+                      }
+                    }
+                  }}
+                  className="w-full py-2.5 bg-[#F8F5E9] hover:bg-gray-100 text-[#8B6E30] active:scale-98 transition-all font-bold text-xs rounded-xl cursor-pointer flex items-center justify-center gap-1.5 border border-[#E0DBC5]/40"
+                >
+                  <Archive size={14} />
+                  Archive / Complete Crop Cycle
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Main KPI Badges Grid */}
       <div className="grid grid-cols-2 gap-3">

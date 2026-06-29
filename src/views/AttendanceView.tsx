@@ -27,6 +27,8 @@ import {
   filterByCrop
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
+import { getLocalDateString } from '../utils/date';
+
 
 interface AttendanceViewProps {
   lang: Language;
@@ -53,7 +55,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const [saving, setSaving] = useState(false);
 
   // --- REGISTER TAB STATES ---
-  const [selectedDate, setSelectedDate] = useState('2026-06-23'); // Target system date (Tuesday)
+  const [selectedDate, setSelectedDate] = useState(getLocalDateString()); // Target system date (dynamic today)
   const [registerAttendance, setRegisterAttendance] = useState<Record<string, 'present' | 'absent' | 'half_day'>>({});
   const [registerWages, setRegisterWages] = useState<Record<string, string>>({});
   const [registerWorkTypes, setRegisterWorkTypes] = useState<Record<string, string>>({});
@@ -264,7 +266,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   };
 
   const adjustDate = (days: number) => {
-    const current = new Date(selectedDate);
+    const [year, month, day] = selectedDate.split('-').map(Number);
+    const current = new Date(year, month - 1, day);
     current.setDate(current.getDate() + days);
     const yyyy = current.getFullYear();
     const mm = String(current.getMonth() + 1).padStart(2, '0');
@@ -274,7 +277,8 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
   const formatDateLabel = (dateStr: string) => {
     if (!dateStr) return '';
-    const d = new Date(dateStr);
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const d = new Date(year, month - 1, day);
     const weekday = d.toLocaleDateString(lang === 'te' ? 'te-IN' : 'en-US', { weekday: 'long' });
     const formatted = d.toLocaleDateString(lang === 'te' ? 'te-IN' : 'en-US', { day: 'numeric', month: 'short', year: 'numeric' });
     return `${weekday}, ${formatted}`;

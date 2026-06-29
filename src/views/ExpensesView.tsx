@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Expense, fetchExpenses, createExpense, editExpense, removeExpense, CropCycle, filterByCrop } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
+import { getLocalDateString } from '../utils/date';
 
 interface ExpensesViewProps {
   lang: Language;
@@ -51,7 +52,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
   const [amount, setAmount] = useState('');
   const [description, setDescription] = useState('');
   const [notes, setNotes] = useState('');
-  const [date, setDate] = useState('2026-06-23'); // Target system date
+  const [date, setDate] = useState(getLocalDateString()); // Target system date
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -117,7 +118,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
       setAmount('');
       setDescription('');
       setNotes('');
-      setDate('2026-06-23');
+      setDate(getLocalDateString());
       
       loadExpenses();
     } catch (error) {
@@ -247,7 +248,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
             setAmount('');
             setDescription('');
             setNotes('');
-            setDate('2026-06-23');
+            setDate(getLocalDateString());
             setShowAddModal(true);
           }}
           className="bg-primary text-white p-3 rounded-2xl shadow-soft btn-active-scale cursor-pointer flex items-center gap-1 font-bold text-sm"
