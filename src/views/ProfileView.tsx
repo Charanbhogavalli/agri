@@ -16,6 +16,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { logoutUser, isMockMode, resetMockData, clearAllDatabaseData, fetchEmailRecipients, saveEmailRecipients } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
+import { runSystemTests, TestCaseResult } from '../utils/systemTests';
 
 interface ProfileViewProps {
   lang: Language;
@@ -101,6 +102,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   }
   const [emailLogs, setEmailLogs] = React.useState<EmailLog[]>([]);
   const [selectedLogHtml, setSelectedLogHtml] = React.useState<string | null>(null);
+  const [testResults, setTestResults] = React.useState<TestCaseResult[]>([]);
+  const [runningTests, setRunningTests] = React.useState(false);
+  const [showTestModal, setShowTestModal] = React.useState(false);
 
   React.useEffect(() => {
     loadSettings();
@@ -210,6 +214,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       showToast("API keys updated successfully!", "success");
     } catch (e) {
       showToast("Failed to save API keys", "error");
+    }
+  };
+
+  const handleRunDiagnostics = async () => {
+    setRunningTests(true);
+    setShowTestModal(true);
+    try {
+      const results = await runSystemTests();
+      setTestResults(results);
+    } catch (e) {
+      showToast("Failed to run diagnostics", "error");
+    } finally {
+      setRunningTests(false);
     }
   };
 
@@ -618,6 +635,26 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         )}
       </div>
 
+      {/* System Integrity & Diagnostics */}
+      <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
+          <CheckCircle2 size={14} className="text-gray-400" />
+          {bilingual ? 'System Integrity & Diagnostics / సిస్టమ్ డయాగ్నోస్టిక్స్' : 'System Integrity & Diagnostics'}
+        </h3>
+        
+        <p className="text-xs text-gray-500 leading-snug font-medium pl-1">
+          Run our automated test suite consisting of **52 distinct test cases** validating financial calculations, wage overrides, crop isolation filters, and safety constraints.
+        </p>
+
+        <button
+          onClick={handleRunDiagnostics}
+          className="w-full py-3.5 bg-primary text-white font-bold rounded-2xl active:scale-95 shadow-soft text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 mt-2"
+        >
+          <CheckCircle2 size={16} />
+          Run System Diagnostics (52 Tests)
+        </button>
+      </div>
+
       {/* About Section */}
       <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-2">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
@@ -657,6 +694,95 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
       {/* Modal Draft Preview */}
       <EmailPreviewModal html={selectedLogHtml} onClose={() => setSelectedLogHtml(null)} />
+
+      {/* Diagnostics Test Results Modal */}
+      <AnimatePresence>
+        {showTestModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-lg h-[80vh] rounded-3xl p-6 shadow-premium relative flex flex-col gap-4 border border-[#E0DBC5]"
+            >
+              <button 
+                onClick={() => setShowTestModal(false)}
+                className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
+              >
+                <X size={18} />
+              </button>
+
+              <div>
+                <h3 className="text-xl font-bold text-text-dark">
+                  System Diagnostics
+                </h3>
+                <p className="text-xs text-gray-400 font-semibold mt-0.5">
+                  Validating agricultural business logic
+                </p>
+              </div>
+
+              {runningTests ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3">
+                  <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-xs text-gray-500 font-bold">Running 52 validation test cases...</span>
+                </div>
+              ) : (
+                <div className="flex-col flex flex-1 overflow-hidden">
+                  {/* Summary Bar */}
+                  <div className="bg-[#F8F5E9] border border-[#E0DBC5]/45 rounded-2xl p-4 mb-4 flex justify-between items-center shrink-0">
+                    <div>
+                      <span className="text-2xl font-black text-primary">
+                        {testResults.filter(r => r.status === 'passed').length} / {testResults.length}
+                      </span>
+                      <span className="text-xs text-gray-500 font-bold ml-2">Tests Passed</span>
+                    </div>
+                    {testResults.every(r => r.status === 'passed') ? (
+                      <span className="text-xs bg-success-green/10 text-success-green font-black uppercase px-3 py-1 rounded-xl">
+                        100% HEALTHY
+                      </span>
+                    ) : (
+                      <span className="text-xs bg-danger-red/10 text-danger-red font-black uppercase px-3 py-1 rounded-xl">
+                        ATTENTION REQUIRED
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Scrollable list */}
+                  <div className="flex-1 overflow-y-auto no-scrollbar space-y-2.5 pr-1">
+                    {testResults.map(res => (
+                      <div 
+                        key={res.id}
+                        className="p-3 border border-gray-100 rounded-2xl bg-gray-50/50 flex justify-between items-center text-xs gap-3"
+                      >
+                        <div className="min-w-0">
+                          <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">
+                            {res.category}
+                          </span>
+                          <span className="font-bold text-text-dark leading-tight block mt-0.5 truncate">
+                            {res.name}
+                          </span>
+                          {res.error && (
+                            <span className="text-[10px] text-danger-red font-bold mt-1 block">
+                              Error: {res.error}
+                            </span>
+                          )}
+                        </div>
+                        <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-lg shrink-0 ${
+                          res.status === 'passed' 
+                            ? 'bg-success-green/10 text-success-green' 
+                            : 'bg-danger-red/10 text-danger-red'
+                        }`}>
+                          {res.status === 'passed' ? 'PASS' : 'FAIL'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
