@@ -724,12 +724,10 @@ export default function App() {
                     <span className="text-primary truncate">
                       {selectedCropCycleId === 'all' 
                         ? t('allCrops', lang) 
-                        : selectedCropCycleId === 'legacy_crop_2025_2026'
-                          ? t('legacyRecords', lang)
-                          : (() => {
-                              const c = cropCycles.find(c => c.id === selectedCropCycleId);
-                              return c ? `${c.cropName} (${c.season})` : 'All Crops';
-                            })()
+                        : (() => {
+                            const c = cropCycles.find(c => c.id === selectedCropCycleId);
+                            return c ? `${c.cropName} (${c.season})` : 'All Crops';
+                          })()
                       }
                     </span>
                   </div>
@@ -758,19 +756,7 @@ export default function App() {
                           {selectedCropCycleId === 'all' && <Check size={12} className="text-primary" />}
                         </button>
 
-                        <button
-                          onClick={() => {
-                            setSelectedCropCycleId('legacy_crop_2025_2026');
-                            localStorage.setItem('paramesh_selected_crop_cycle_id', 'legacy_crop_2025_2026');
-                            setIsCropDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === 'legacy_crop_2025_2026' ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
-                        >
-                          <span>{t('legacyRecords', lang)}</span>
-                          {selectedCropCycleId === 'legacy_crop_2025_2026' && <Check size={12} className="text-primary" />}
-                        </button>
-
-                        {cropCycles.filter(c => c.id !== 'legacy_crop_2025_2026').map(crop => (
+                        {cropCycles.map(crop => (
                           <button
                             key={crop.id}
                             onClick={() => {

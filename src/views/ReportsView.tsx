@@ -568,9 +568,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                     Current Crop ({
                       selectedCropCycleId === 'all' 
                         ? t('allCrops', lang) 
-                        : selectedCropCycleId === 'legacy_crop_2025_2026'
-                          ? t('legacyRecords', lang)
-                          : cropCycles.find(c => c.id === selectedCropCycleId)?.cropName || 'Selected Crop'
+                        : (() => {
+                            const c = cropCycles.find(c => c.id === selectedCropCycleId);
+                            return c ? `${c.cropName} (${c.season})` : 'Selected Crop';
+                          })()
                     })
                   </button>
                   <button
