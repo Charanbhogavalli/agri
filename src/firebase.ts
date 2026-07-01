@@ -1474,6 +1474,12 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
     );
   }
 
+  const uniqueWorkerIds = Array.from(new Set([
+    ...rawAttendance.map((a: any) => a.workerId),
+    ...rawPayments.map((p: any) => p.workerId),
+    ...rawWorkers.map((w: any) => w.id)
+  ]));
+
   const legacyCrop: CropCycle = {
     id: legacyCropId,
     cropName: 'Legacy Crop',
@@ -1489,14 +1495,9 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
     notes: 'One-time legacy production migration.',
     ownerId: uid,
     ownerEmail: email,
-    createdAt
+    createdAt,
+    workerIds: uniqueWorkerIds
   };
-
-  const uniqueWorkerIds = Array.from(new Set([
-    ...rawAttendance.map((a: any) => a.workerId),
-    ...rawPayments.map((p: any) => p.workerId),
-    ...rawWorkers.map((w: any) => w.id)
-  ]));
 
   const runRollback = async () => {
     console.warn("Rolling back database to pre-migration backup state...");
@@ -1537,14 +1538,10 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
           rbCount++;
         };
 
-        // Delete legacy crop, worker crops, composite attendance and migration doc
+        // Delete legacy crop, worker crops, and migration doc
         addRbOp('delete', doc(db, 'cropCycles', legacyCropId));
         uniqueWorkerIds.forEach(wId => {
           addRbOp('delete', doc(db, 'workerCrops', `wc_${wId}_${legacyCropId}`));
-        });
-        rawAttendance.forEach(a => {
-          const newId = `${a.workerId}_${legacyCropId}_${a.date}`;
-          addRbOp('delete', doc(db, 'attendance', newId));
         });
         addRbOp('delete', doc(db, 'migrations', `v3_${uid}`));
 
@@ -1560,8 +1557,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
 
         // Restore original attendance
         rawAttendance.forEach(a => {
-          const oldId = a.id || `${a.workerId}_${a.date}`;
-          addRbOp('set', doc(db, 'attendance', oldId), a);
+          addRbOp('set', doc(db, 'attendance', a.id), a);
         });
 
         // Restore original payments
@@ -1604,20 +1600,16 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
       }));
       setMockData('paramesh_worker_crops', [...otherWorkerCrops, ...newWorkerCrops]);
 
-      // 3. Update Attendance (keep other users' records, map current user's records with new composite IDs)
+      // 3. Update Attendance (keep other users' records, map current user's records keeping original IDs)
       const allAttendance = getMockData('paramesh_attendance');
       const otherAttendance = allAttendance.filter((a: any) => a.ownerId !== uid);
-      const newAttendance = rawAttendance.map((a: any) => {
-        const newId = `att_${a.workerId}_${legacyCropId}_${a.date}`;
-        return {
-          ...a,
-          id: newId,
-          cropCycleId: legacyCropId
-        };
-      });
+      const newAttendance = rawAttendance.map((a: any) => ({
+        ...a,
+        cropCycleId: legacyCropId
+      }));
       setMockData('paramesh_attendance', [...otherAttendance, ...newAttendance]);
 
-      // 4. Update Payments (keep other users' records, map current user's records)
+      // 4. Update Payments (keep other users' records, map current user's records keeping original IDs)
       const allPayments = getMockData('paramesh_payments');
       const otherPayments = allPayments.filter((p: any) => p.ownerId !== uid);
       const newPayments = rawPayments.map((p: any) => ({
@@ -1626,7 +1618,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
       }));
       setMockData('paramesh_payments', [...otherPayments, ...newPayments]);
 
-      // 5. Update Expenses (keep other users' records, map current user's records)
+      // 5. Update Expenses (keep other users' records, map current user's records keeping original IDs)
       const allExpenses = getMockData('paramesh_expenses');
       const otherExpenses = allExpenses.filter((e: any) => e.ownerId !== uid);
       const newExpenses = rawExpenses.map((e: any) => ({
@@ -1687,28 +1679,17 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
         });
       });
 
-      // 5. Update attendance (using composite IDs to avoid duplication)
+      // 5. Update attendance in-place (keeping original document IDs)
       rawAttendance.forEach((a: any) => {
-        const oldId = a.id || `${a.workerId}_${a.date}`;
-        const newId = `${a.workerId}_${legacyCropId}_${a.date}`;
-        if (oldId !== newId) {
-          addOp('delete', doc(db, 'attendance', oldId));
-          addOp('set', doc(db, 'attendance', newId), {
-            ...a,
-            id: newId,
-            cropCycleId: legacyCropId
-          });
-        } else {
-          addOp('update', doc(db, 'attendance', oldId), { cropCycleId: legacyCropId });
-        }
+        addOp('update', doc(db, 'attendance', a.id), { cropCycleId: legacyCropId });
       });
 
-      // 6. Update payments
+      // 6. Update payments in-place (keeping original document IDs)
       rawPayments.forEach((p: any) => {
         addOp('update', doc(db, 'payments', p.id), { cropCycleId: legacyCropId });
       });
 
-      // 7. Update expenses
+      // 7. Update expenses in-place (keeping original document IDs)
       rawExpenses.forEach((e: any) => {
         addOp('update', doc(db, 'expenses', e.id), { cropCycleId: legacyCropId });
       });
