@@ -107,6 +107,14 @@ export default function App() {
   const [copyExpensesFlag, setCopyExpensesFlag] = useState(false);
   const [copyWorkerNotesFlag, setCopyWorkerNotesFlag] = useState(true);
   const [cropCreationStep, setCropCreationStep] = useState<'creating' | 'workers' | 'attendance' | 'payments' | 'expenses' | 'dashboard' | 'reports' | 'finalizing' | 'success' | null>(null);
+  const [workersProgressCount, setWorkersProgressCount] = useState(0);
+  const [workersProgressTotal, setWorkersProgressTotal] = useState(0);
+  const [attendanceProgressCount, setAttendanceProgressCount] = useState(0);
+  const [attendanceProgressTotal, setAttendanceProgressTotal] = useState(0);
+  const [paymentsProgressCount, setPaymentsProgressCount] = useState(0);
+  const [paymentsProgressTotal, setPaymentsProgressTotal] = useState(0);
+  const [expensesProgressCount, setExpensesProgressCount] = useState(0);
+  const [expensesProgressTotal, setExpensesProgressTotal] = useState(0);
   const [savingCrop, setSavingCrop] = useState(false);
   
   // Toast notifications state
@@ -288,6 +296,14 @@ export default function App() {
       return;
     }
 
+    setWorkersProgressCount(0);
+    setWorkersProgressTotal(0);
+    setAttendanceProgressCount(0);
+    setAttendanceProgressTotal(0);
+    setPaymentsProgressCount(0);
+    setPaymentsProgressTotal(0);
+    setExpensesProgressCount(0);
+    setExpensesProgressTotal(0);
     setSavingCrop(true);
     setCropCreationStep('creating');
     try {
@@ -307,8 +323,21 @@ export default function App() {
         copyPayments: copyPaymentsFlag,
         copyExpenses: copyExpensesFlag,
         copyWorkerNotes: copyWorkerNotesFlag,
-        onProgress: (step: 'creating' | 'workers' | 'attendance' | 'payments' | 'expenses' | 'dashboard' | 'reports' | 'finalizing' | 'success') => {
+        onProgress: (step, current, total) => {
           if (step !== 'success') setCropCreationStep(step);
+          if (step === 'workers') {
+            setWorkersProgressCount(current);
+            setWorkersProgressTotal(total);
+          } else if (step === 'attendance') {
+            setAttendanceProgressCount(current);
+            setAttendanceProgressTotal(total);
+          } else if (step === 'payments') {
+            setPaymentsProgressCount(current);
+            setPaymentsProgressTotal(total);
+          } else if (step === 'expenses') {
+            setExpensesProgressCount(current);
+            setExpensesProgressTotal(total);
+          }
         }
       });
 
@@ -904,6 +933,22 @@ export default function App() {
                       const stepIndex = stepOrder.indexOf(step.key);
                       const status = currentIndex > stepIndex ? 'completed' : currentIndex === stepIndex ? 'current' : 'pending';
 
+                      const getProgressText = () => {
+                        if (step.key === 'workers' && workersProgressTotal > 0) {
+                          return ` ${workersProgressCount}/${workersProgressTotal}`;
+                        }
+                        if (step.key === 'attendance' && attendanceProgressTotal > 0) {
+                          return ` ${attendanceProgressCount}/${attendanceProgressTotal}`;
+                        }
+                        if (step.key === 'payments' && paymentsProgressTotal > 0) {
+                          return ` ${paymentsProgressCount}/${paymentsProgressTotal}`;
+                        }
+                        if (step.key === 'expenses' && expensesProgressTotal > 0) {
+                          return ` ${expensesProgressCount}/${expensesProgressTotal}`;
+                        }
+                        return '';
+                      };
+
                       return (
                         <div key={step.key} className="flex items-center gap-2 text-xs font-semibold">
                           {status === 'completed' && (
@@ -916,7 +961,7 @@ export default function App() {
                             <span className="w-4 h-4 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center text-[10px] font-bold">•</span>
                           )}
                           <span className={`${status === 'current' ? 'text-primary font-bold' : status === 'completed' ? 'text-text-dark' : 'text-gray-400'}`}>
-                            {step.label}
+                            {step.label}{getProgressText()}
                           </span>
                         </div>
                       );

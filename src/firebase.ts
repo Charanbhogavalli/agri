@@ -1596,7 +1596,7 @@ export interface RebuildCropCycleOptions {
   copyPayments: boolean;
   copyExpenses: boolean;
   copyWorkerNotes: boolean;
-  onProgress: (step: 'creating' | 'workers' | 'attendance' | 'payments' | 'expenses' | 'dashboard' | 'reports' | 'finalizing' | 'success') => void;
+  onProgress: (step: 'creating' | 'workers' | 'attendance' | 'payments' | 'expenses' | 'dashboard' | 'reports' | 'finalizing' | 'success', current: number, total: number) => void;
 }
 
 export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions): Promise<string> => {
@@ -1645,18 +1645,33 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
       sourceWorkerCrops = getMockData('paramesh_worker_crops').filter((wc: any) => wc.cropCycleId === sourceCropId && wc.ownerId === uid);
     } else {
       const sourceCropRef = doc(db, 'cropCycles', sourceCropId);
-      const sourceCropSnap = await getDoc(sourceCropRef);
+      const [
+        sourceCropSnap,
+        allWorkersSnap,
+        attendanceSnap,
+        paymentsSnap,
+        expensesSnap,
+        workerCropsSnap
+      ] = await Promise.all([
+        getDoc(sourceCropRef),
+        getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'attendance'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'payments'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'expenses'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'workerCrops'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid)))
+      ]);
+
       if (!sourceCropSnap.exists()) throw new Error("Source crop cycle not found.");
       const sourceCropObj = sourceCropSnap.data() as CropCycle;
       const assignedIds = sourceCropObj.workerIds || [];
 
-      const allWorkers = (await getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Worker));
+      const allWorkers = allWorkersSnap.docs.map(d => ({ id: d.id, ...d.data() } as Worker));
       rawWorkers = allWorkers.filter(w => assignedIds.includes(w.id));
 
-      rawAttendance = (await getDocs(query(collection(db, 'attendance'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord));
-      rawPayments = (await getDocs(query(collection(db, 'payments'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Payment));
-      rawExpenses = (await getDocs(query(collection(db, 'expenses'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Expense));
-      sourceWorkerCrops = (await getDocs(query(collection(db, 'workerCrops'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as WorkerCrop));
+      rawAttendance = attendanceSnap.docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord));
+      rawPayments = paymentsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Payment));
+      rawExpenses = expensesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Expense));
+      sourceWorkerCrops = workerCropsSnap.docs.map(d => ({ id: d.id, ...d.data() } as WorkerCrop));
     }
   }
 
@@ -1701,7 +1716,7 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
     workerIds: copyWorkers ? rawWorkers.map(w => w.id) : []
   };
 
-  onProgress('creating');
+  onProgress('creating', 0, 1);
 
   if (isMockMode) {
     const backupCrops = JSON.stringify(getMockData('paramesh_crop_cycles'));
@@ -1714,11 +1729,12 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
       const crops = getMockData('paramesh_crop_cycles');
       crops.push(newCropCycleDoc);
       setMockData('paramesh_crop_cycles', crops);
+      onProgress('creating', 1, 1);
 
       if (copyWorkers) {
-        onProgress('workers');
+        onProgress('workers', 0, rawWorkers.length);
         const wcList = getMockData('paramesh_worker_crops');
-        rawWorkers.forEach(w => {
+        rawWorkers.forEach((w, idx) => {
           const sourceWc = sourceWorkerCrops.find(wc => wc.workerId === w.id);
           const wcNotes = (copyWorkerNotes && sourceWc) ? sourceWc.notes : undefined;
           wcList.push({
@@ -1730,55 +1746,59 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
             createdAt,
             notes: wcNotes
           });
+          onProgress('workers', idx + 1, rawWorkers.length);
         });
         setMockData('paramesh_worker_crops', wcList);
       }
 
       if (copyAttendance) {
-        onProgress('attendance');
+        onProgress('attendance', 0, rawAttendance.length);
         const attList = getMockData('paramesh_attendance');
-        rawAttendance.forEach(a => {
+        rawAttendance.forEach((a, idx) => {
           attList.push({
             ...a,
             id: 'att_' + Math.random().toString(36).substr(2, 9),
             cropCycleId: newCropId,
             createdAt
           });
+          onProgress('attendance', idx + 1, rawAttendance.length);
         });
         setMockData('paramesh_attendance', attList);
       }
 
       if (copyPayments) {
-        onProgress('payments');
+        onProgress('payments', 0, rawPayments.length);
         const payList = getMockData('paramesh_payments');
-        rawPayments.forEach(p => {
+        rawPayments.forEach((p, idx) => {
           payList.push({
             ...p,
             id: 'p_' + Math.random().toString(36).substr(2, 9),
             cropCycleId: newCropId,
             createdAt
           });
+          onProgress('payments', idx + 1, rawPayments.length);
         });
         setMockData('paramesh_payments', payList);
       }
 
       if (copyExpenses) {
-        onProgress('expenses');
+        onProgress('expenses', 0, rawExpenses.length);
         const expList = getMockData('paramesh_expenses');
-        rawExpenses.forEach(e => {
+        rawExpenses.forEach((e, idx) => {
           expList.push({
             ...e,
             id: 'e_' + Math.random().toString(36).substr(2, 9),
             cropCycleId: newCropId,
             createdAt
           });
+          onProgress('expenses', idx + 1, rawExpenses.length);
         });
         setMockData('paramesh_expenses', expList);
       }
 
-      onProgress('dashboard');
-      onProgress('reports');
-      onProgress('finalizing');
+      onProgress('dashboard', 0, 0);
+      onProgress('reports', 0, 0);
+      onProgress('finalizing', 0, 0);
 
       const postWorkers = getMockData('paramesh_workers').filter((w: any) => w.ownerId === uid && newCropCycleDoc.workerIds?.includes(w.id));
       const postAttendance = getMockData('paramesh_attendance').filter((a: any) => a.cropCycleId === newCropId && a.ownerId === uid);
@@ -1803,7 +1823,7 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
         throw new Error("Financial validation mismatch post-copy.");
       }
 
-      onProgress('success');
+      onProgress('success', 0, 0);
       return newCropId;
     } catch (err) {
       setMockData('paramesh_crop_cycles', JSON.parse(backupCrops));
@@ -1843,30 +1863,47 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
     };
 
     try {
-      const batches: WriteBatch[] = [];
       let currentBatch = writeBatch(db);
       let opCount = 0;
 
-      const addOp = (action: 'set', collectionName: string, docId: string, data: any) => {
-        if (opCount >= 450) {
-          batches.push(currentBatch);
+      const commitCurrentBatch = async () => {
+        if (opCount > 0) {
+          await currentBatch.commit();
           currentBatch = writeBatch(db);
           opCount = 0;
         }
+      };
+
+      const addWrite = async (collectionName: string, docId: string, data: any, stepKey: any, currentCount: number, totalCount: number) => {
         const ref = doc(db, collectionName, docId);
         currentBatch.set(ref, data);
         createdPaths.push(`${collectionName}/${docId}`);
         opCount++;
+
+        if (opCount >= 100) {
+          await commitCurrentBatch();
+          onProgress(stepKey, currentCount, totalCount);
+        }
       };
 
-      addOp('set', 'cropCycles', newCropId, newCropCycleDoc);
+      // 1. Create Crop
+      onProgress('creating', 0, 1);
+      const cropRef = doc(db, 'cropCycles', newCropId);
+      currentBatch.set(cropRef, newCropCycleDoc);
+      createdPaths.push(`cropCycles/${newCropId}`);
+      opCount++;
+      await commitCurrentBatch();
+      onProgress('creating', 1, 1);
 
+      // 2. Link Workers
       if (copyWorkers) {
-        rawWorkers.forEach(w => {
+        onProgress('workers', 0, rawWorkers.length);
+        for (let i = 0; i < rawWorkers.length; i++) {
+          const w = rawWorkers[i];
           const wcId = `wc_${w.id}_${newCropId}`;
           const sourceWc = sourceWorkerCrops.find(wc => wc.workerId === w.id);
           const wcNotes = (copyWorkerNotes && sourceWc) ? sourceWc.notes : null;
-          addOp('set', 'workerCrops', wcId, {
+          await addWrite('workerCrops', wcId, {
             id: wcId,
             workerId: w.id,
             cropCycleId: newCropId,
@@ -1874,65 +1911,82 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
             ownerEmail: email,
             createdAt,
             notes: wcNotes
-          });
-        });
+          }, 'workers', i + 1, rawWorkers.length);
+        }
+        await commitCurrentBatch();
+        onProgress('workers', rawWorkers.length, rawWorkers.length);
       }
 
+      // 3. Copy Attendance
       if (copyAttendance) {
-        rawAttendance.forEach(a => {
+        onProgress('attendance', 0, rawAttendance.length);
+        for (let i = 0; i < rawAttendance.length; i++) {
+          const a = rawAttendance[i];
           const newAttId = doc(collection(db, 'attendance')).id;
-          addOp('set', 'attendance', newAttId, {
+          await addWrite('attendance', newAttId, {
             ...a,
             id: newAttId,
             cropCycleId: newCropId,
             createdAt
-          });
-        });
+          }, 'attendance', i + 1, rawAttendance.length);
+        }
+        await commitCurrentBatch();
+        onProgress('attendance', rawAttendance.length, rawAttendance.length);
       }
 
+      // 4. Copy Payments
       if (copyPayments) {
-        rawPayments.forEach(p => {
+        onProgress('payments', 0, rawPayments.length);
+        for (let i = 0; i < rawPayments.length; i++) {
+          const p = rawPayments[i];
           const newPayId = doc(collection(db, 'payments')).id;
-          addOp('set', 'payments', newPayId, {
+          await addWrite('payments', newPayId, {
             ...p,
             id: newPayId,
             cropCycleId: newCropId,
             createdAt
-          });
-        });
+          }, 'payments', i + 1, rawPayments.length);
+        }
+        await commitCurrentBatch();
+        onProgress('payments', rawPayments.length, rawPayments.length);
       }
 
+      // 5. Copy Expenses
       if (copyExpenses) {
-        rawExpenses.forEach(e => {
+        onProgress('expenses', 0, rawExpenses.length);
+        for (let i = 0; i < rawExpenses.length; i++) {
+          const e = rawExpenses[i];
           const newExpId = doc(collection(db, 'expenses')).id;
-          addOp('set', 'expenses', newExpId, {
+          await addWrite('expenses', newExpId, {
             ...e,
             id: newExpId,
             cropCycleId: newCropId,
             createdAt
-          });
-        });
+          }, 'expenses', i + 1, rawExpenses.length);
+        }
+        await commitCurrentBatch();
+        onProgress('expenses', rawExpenses.length, rawExpenses.length);
       }
 
-      batches.push(currentBatch);
-      
-      onProgress('workers');
-      onProgress('attendance');
-      onProgress('payments');
-      onProgress('expenses');
+      onProgress('dashboard', 0, 0);
+      onProgress('reports', 0, 0);
+      onProgress('finalizing', 0, 0);
 
-      for (const b of batches) {
-        await b.commit();
-      }
-
-      onProgress('dashboard');
-      onProgress('reports');
-      onProgress('finalizing');
+      // Concurrent Post-flight Validation Fetches
+      const [
+        attendanceSnapPost,
+        paymentsSnapPost,
+        expensesSnapPost
+      ] = await Promise.all([
+        getDocs(query(collection(db, 'attendance'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'payments'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'expenses'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid)))
+      ]);
 
       const postWorkers = rawWorkers;
-      const postAttendance = (await getDocs(query(collection(db, 'attendance'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid)))).docs.map(d => d.data() as AttendanceRecord);
-      const postPayments = (await getDocs(query(collection(db, 'payments'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid)))).docs.map(d => d.data() as Payment);
-      const postExpenses = (await getDocs(query(collection(db, 'expenses'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid)))).docs.map(d => d.data() as Expense);
+      const postAttendance = attendanceSnapPost.docs.map(d => d.data() as AttendanceRecord);
+      const postPayments = paymentsSnapPost.docs.map(d => d.data() as Payment);
+      const postExpenses = expensesSnapPost.docs.map(d => d.data() as Expense);
 
       const postEarned = calculateEarned(postWorkers, postAttendance);
       const postPaid = calculatePaid(postPayments);
@@ -1962,7 +2016,7 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
         );
       }
 
-      onProgress('success');
+      onProgress('success', 0, 0);
       return newCropId;
     } catch (err) {
       await runFirestoreRollback();
