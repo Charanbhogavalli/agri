@@ -242,7 +242,10 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     try {
       const report = await executeProductionMigration();
       setMigrationReport(report);
-      showToast("Migration executed successfully!", "success");
+      showToast(bilingual ? "Migration executed successfully! Reloading to update views... / మైగ్రేషన్ విజయవంతంగా పూర్తయింది! వీక్షణలను నవీకరించడానికి రీలోడ్ అవుతోంది..." : "Migration executed successfully! Reloading to update views...", "success");
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
     } catch (e: any) {
       showToast(`Migration failed: ${e.message || String(e)}`, "error");
       setShowMigrationModal(false);
