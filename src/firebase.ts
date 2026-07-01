@@ -1648,17 +1648,17 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
       const [
         sourceCropSnap,
         allWorkersSnap,
-        attendanceSnap,
-        paymentsSnap,
-        expensesSnap,
-        workerCropsSnap
+        allAttendanceSnap,
+        allPaymentsSnap,
+        allExpensesSnap,
+        allWorkerCropsSnap
       ] = await Promise.all([
         getDoc(sourceCropRef),
         getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid))),
-        getDocs(query(collection(db, 'attendance'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid))),
-        getDocs(query(collection(db, 'payments'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid))),
-        getDocs(query(collection(db, 'expenses'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid))),
-        getDocs(query(collection(db, 'workerCrops'), where('cropCycleId', '==', sourceCropId), where('ownerId', '==', uid)))
+        getDocs(query(collection(db, 'attendance'), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'payments'), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'expenses'), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'workerCrops'), where('ownerId', '==', uid)))
       ]);
 
       if (!sourceCropSnap.exists()) throw new Error("Source crop cycle not found.");
@@ -1668,10 +1668,27 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
       const allWorkers = allWorkersSnap.docs.map(d => ({ id: d.id, ...d.data() } as Worker));
       rawWorkers = allWorkers.filter(w => assignedIds.includes(w.id));
 
-      rawAttendance = attendanceSnap.docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord));
-      rawPayments = paymentsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Payment));
-      rawExpenses = expensesSnap.docs.map(d => ({ id: d.id, ...d.data() } as Expense));
-      sourceWorkerCrops = workerCropsSnap.docs.map(d => ({ id: d.id, ...d.data() } as WorkerCrop));
+      rawAttendance = allAttendanceSnap.docs
+        .map(d => ({ id: d.id, ...d.data() } as AttendanceRecord))
+        .filter(a => a.cropCycleId === sourceCropId);
+      rawPayments = allPaymentsSnap.docs
+        .map(d => ({ id: d.id, ...d.data() } as Payment))
+        .filter(p => p.cropCycleId === sourceCropId);
+      rawExpenses = allExpensesSnap.docs
+        .map(d => ({ id: d.id, ...d.data() } as Expense))
+        .filter(e => e.cropCycleId === sourceCropId);
+      sourceWorkerCrops = allWorkerCropsSnap.docs
+        .map(d => ({ id: d.id, ...d.data() } as WorkerCrop))
+        .filter(wc => wc.cropCycleId === sourceCropId);
+    }
+  } else {
+    if (copyWorkers) {
+      if (isMockMode) {
+        rawWorkers = getMockData('paramesh_workers').filter((w: any) => w.ownerId === uid);
+      } else {
+        const workersSnap = await getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid)));
+        rawWorkers = workersSnap.docs.map(d => ({ id: d.id, ...d.data() } as Worker));
+      }
     }
   }
 
@@ -1967,19 +1984,25 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
 
       // Concurrent Post-flight Validation Fetches
       const [
-        attendanceSnapPost,
-        paymentsSnapPost,
-        expensesSnapPost
+        allAttendanceSnapPost,
+        allPaymentsSnapPost,
+        allExpensesSnapPost
       ] = await Promise.all([
-        getDocs(query(collection(db, 'attendance'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid))),
-        getDocs(query(collection(db, 'payments'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid))),
-        getDocs(query(collection(db, 'expenses'), where('cropCycleId', '==', newCropId), where('ownerId', '==', uid)))
+        getDocs(query(collection(db, 'attendance'), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'payments'), where('ownerId', '==', uid))),
+        getDocs(query(collection(db, 'expenses'), where('ownerId', '==', uid)))
       ]);
 
       const postWorkers = rawWorkers;
-      const postAttendance = attendanceSnapPost.docs.map(d => d.data() as AttendanceRecord);
-      const postPayments = paymentsSnapPost.docs.map(d => d.data() as Payment);
-      const postExpenses = expensesSnapPost.docs.map(d => d.data() as Expense);
+      const postAttendance = allAttendanceSnapPost.docs
+        .map(d => d.data() as AttendanceRecord)
+        .filter(a => a.cropCycleId === newCropId);
+      const postPayments = allPaymentsSnapPost.docs
+        .map(d => d.data() as Payment)
+        .filter(p => p.cropCycleId === newCropId);
+      const postExpenses = allExpensesSnapPost.docs
+        .map(d => d.data() as Expense)
+        .filter(e => e.cropCycleId === newCropId);
 
       const postEarned = calculateEarned(postWorkers, postAttendance);
       const postPaid = calculatePaid(postPayments);
