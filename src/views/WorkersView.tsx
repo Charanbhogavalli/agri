@@ -875,9 +875,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                             const earned = calculateWorkerEarnings(historyWorker, cycleAtt);
                             const paid = calculateWorkerPayments(historyWorker, cyclePay);
                             const balance = calculateWorkerPending(historyWorker, cycleAtt, cyclePay);
-                            const name = c.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : c.cropName;
-                            const season = c.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : c.season;
-                            return { name, season, days, earned, paid, balance };
+                            return { name: c.cropName, season: c.season, days, earned, paid, balance };
                           }).filter(row => row.days > 0 || row.paid > 0);
 
                           // Legacy records grouping

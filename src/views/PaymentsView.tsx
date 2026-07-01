@@ -279,7 +279,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
       return;
     }
     
-    const cropName = cropCycles.find(c => c.id === payment.cropCycleId)?.cropName || '2025 to 2026';
+    const cropName = cropCycles.find(c => c.id === payment.cropCycleId)?.cropName || 'Legacy Crop';
 
     const htmlContent = `
       <html>

@@ -344,7 +344,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   {bilingual ? 'Crop Cycle Details / పంట వివరాలు' : 'Crop Cycle Details'}
                 </span>
                 <h2 className="text-lg font-black text-text-dark mt-0.5 truncate">
-                  {crop.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : `${crop.cropName} (${crop.season})`}
+                  {crop.cropName} ({crop.season})
                 </h2>
                 <p className="text-xs text-gray-400 font-semibold mt-1">
                   Variety: {crop.variety || 'N/A'} • Land: {crop.landName || 'N/A'} ({crop.area || '0'} acres)
@@ -414,8 +414,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <button
                   type="button"
                   onClick={async () => {
-                    const displayName = crop.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : `${crop.cropName} (${crop.season})`;
-                    if (window.confirm(`Are you sure you want to mark "${displayName}" as completed? This will archive the crop cycle.`)) {
+                    if (window.confirm(`Are you sure you want to mark "${crop.cropName} (${crop.season})" as completed? This will archive the crop cycle.`)) {
                       try {
                         await editCropCycle(crop.id, { 
                           status: 'completed', 
