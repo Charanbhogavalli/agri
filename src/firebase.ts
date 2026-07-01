@@ -1054,19 +1054,37 @@ export const migrateLegacyRecords = async (): Promise<void> => {
 
   const completionKey = `paramesh_reset_completed_v4_${uid}`;
 
-  // Check completion flag for v4 backend reset (check localStorage first for instant early return)
+  let resetAlreadyDone = false;
   if (localStorage.getItem(completionKey) === 'true') {
-    return;
-  }
-  if (!isMockMode) {
+    resetAlreadyDone = true;
+  } else if (!isMockMode) {
     try {
       const resetSnap = await getDoc(doc(db, 'migrations', `v4_${uid}`));
       if (resetSnap.exists() && resetSnap.data()?.completed === true) {
         localStorage.setItem(completionKey, 'true');
-        return;
+        resetAlreadyDone = true;
       }
     } catch (e) {
       console.warn("Reset check error:", e);
+    }
+  }
+
+  // Double check: Does the legacy crop cycle document actually exist?
+  if (resetAlreadyDone) {
+    try {
+      const legacyCropSnap = isMockMode 
+        ? getMockData('paramesh_crop_cycles').find((c: any) => c.id === legacyCropId && c.ownerId === uid)
+        : await getDoc(doc(db, 'cropCycles', legacyCropId));
+
+      const exists = isMockMode ? !!legacyCropSnap : (legacyCropSnap as any).exists();
+      if (exists) {
+        return;
+      }
+      console.log("Legacy crop cycle document not found in database. Forcing reset execution...");
+      localStorage.removeItem(completionKey);
+    } catch (e) {
+      console.warn("Error double-checking legacy crop cycle, forcing reset:", e);
+      localStorage.removeItem(completionKey);
     }
   }
 
