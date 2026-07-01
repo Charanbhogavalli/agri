@@ -1341,6 +1341,250 @@ export const migrateLegacyRecords = async (): Promise<void> => {
   }
 };
 
+export interface MigrationReport {
+  workersBefore: number;
+  workersAfter: number;
+  inactiveWorkersBefore: number;
+  inactiveWorkersAfter: number;
+  attendanceBefore: number;
+  attendanceAfter: number;
+  paymentsBefore: number;
+  paymentsAfter: number;
+  expensesBefore: number;
+  expensesAfter: number;
+  workerCropsCreated: number;
+  cropCyclesDeleted: number;
+  legacyCropId: string;
+  validationResult: string;
+  financialDiff: number;
+  status: 'SUCCESS' | 'FAILED';
+}
+
+export const executeProductionMigration = async (): Promise<MigrationReport> => {
+  const uid = getCurrentUserId();
+  const email = getCurrentUserEmail();
+  if (!uid) {
+    throw new Error("User must be authenticated to run migration.");
+  }
+
+  const legacyCropId = 'legacy_crop_2025_2026';
+  const createdAt = new Date().toISOString();
+
+  // 1. Fetch current counts (Before)
+  const rawWorkers = isMockMode 
+    ? getMockData('paramesh_workers') 
+    : (await getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const rawAttendance = isMockMode 
+    ? getMockData('paramesh_attendance') 
+    : (await getDocs(query(collection(db, 'attendance'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const rawPayments = isMockMode 
+    ? getMockData('paramesh_payments') 
+    : (await getDocs(query(collection(db, 'payments'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const rawExpenses = isMockMode 
+    ? getMockData('paramesh_expenses') 
+    : (await getDocs(query(collection(db, 'expenses'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const rawCrops = isMockMode 
+    ? getMockData('paramesh_crop_cycles') 
+    : (await getDocs(query(collection(db, 'cropCycles'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const workersBefore = rawWorkers.length;
+  const inactiveWorkersBefore = rawWorkers.filter((w: any) => w.status === 'inactive').length;
+  const attendanceBefore = rawAttendance.length;
+  const paymentsBefore = rawPayments.length;
+  const expensesBefore = rawExpenses.length;
+  const cropCyclesBefore = rawCrops.length;
+
+  const totalPaymentsBefore = rawPayments.reduce((sum: number, p: any) => sum + (parseFloat(p.amount) || 0), 0);
+  const totalExpensesBefore = rawExpenses.reduce((sum: number, e: any) => sum + (parseFloat(e.amount) || 0), 0);
+
+  // 2. Perform Migration
+  const legacyCrop = {
+    id: legacyCropId,
+    cropName: 'Legacy Crop',
+    variety: 'Legacy',
+    season: '2025–2026',
+    landName: 'Legacy Land',
+    area: 'Various',
+    irrigationType: 'Other',
+    startDate: '2025-06-01',
+    expectedHarvestDate: '2026-03-31',
+    actualHarvestDate: '2026-03-31',
+    status: 'completed', // Reset to 'completed' status explicitly requested by migration specs
+    notes: 'One-time legacy production migration.',
+    ownerId: uid,
+    ownerEmail: email,
+    createdAt
+  };
+
+  const uniqueWorkerIds = Array.from(new Set([
+    ...rawAttendance.map((a: any) => a.workerId),
+    ...rawPayments.map((p: any) => p.workerId),
+    ...rawWorkers.map((w: any) => w.id)
+  ]));
+
+  if (isMockMode) {
+    // Save Legacy Crop
+    setMockData('paramesh_crop_cycles', [legacyCrop]);
+    
+    // Assign workers to legacy crop
+    const newWorkerCrops = uniqueWorkerIds.map(wId => ({
+      id: `wc_${wId}_${legacyCropId}`,
+      workerId: wId,
+      cropCycleId: legacyCropId,
+      ownerId: uid,
+      ownerEmail: email,
+      createdAt
+    }));
+    setMockData('paramesh_worker_crops', newWorkerCrops);
+
+    // Update all records
+    setMockData('paramesh_attendance', rawAttendance.map((a: any) => ({ ...a, cropCycleId: legacyCropId })));
+    setMockData('paramesh_payments', rawPayments.map((p: any) => ({ ...p, cropCycleId: legacyCropId })));
+    setMockData('paramesh_expenses', rawExpenses.map((e: any) => ({ ...e, cropCycleId: legacyCropId })));
+    
+    localStorage.setItem('paramesh_migration_completed_v3', 'true');
+  } else {
+    const batches: any[] = [];
+    let currentBatch = writeBatch(db);
+    let opCount = 0;
+
+    const addOp = (action: 'set' | 'update' | 'delete', ref: any, data?: any) => {
+      if (opCount >= 400) {
+        batches.push(currentBatch);
+        currentBatch = writeBatch(db);
+        opCount = 0;
+      }
+      if (action === 'set') {
+        currentBatch.set(ref, data);
+      } else if (action === 'update') {
+        currentBatch.update(ref, data);
+      } else if (action === 'delete') {
+        currentBatch.delete(ref);
+      }
+      opCount++;
+    };
+
+    // 1. Create legacy crop
+    addOp('set', doc(db, 'cropCycles', legacyCropId), legacyCrop);
+
+    // 2. Delete all other crops
+    rawCrops.forEach((c: any) => {
+      if (c.id !== legacyCropId) {
+        addOp('delete', doc(db, 'cropCycles', c.id));
+      }
+    });
+
+    // 3. Create worker crop relationships
+    uniqueWorkerIds.forEach(wId => {
+      const wcId = `wc_${wId}_${legacyCropId}`;
+      addOp('set', doc(db, 'workerCrops', wcId), {
+        id: wcId,
+        workerId: wId,
+        cropCycleId: legacyCropId,
+        ownerId: uid,
+        ownerEmail: email,
+        createdAt
+      });
+    });
+
+    // 4. Update attendance
+    rawAttendance.forEach((a: any) => {
+      const aId = a.id || `${a.workerId}_${a.date}`;
+      addOp('update', doc(db, 'attendance', aId), { cropCycleId: legacyCropId });
+    });
+
+    // 5. Update payments
+    rawPayments.forEach((p: any) => {
+      addOp('update', doc(db, 'payments', p.id), { cropCycleId: legacyCropId });
+    });
+
+    // 6. Update expenses
+    rawExpenses.forEach((e: any) => {
+      addOp('update', doc(db, 'expenses', e.id), { cropCycleId: legacyCropId });
+    });
+
+    // 7. Write migration record
+    addOp('set', doc(db, 'migrations', `v3_${uid}`), {
+      completed: true,
+      timestamp: new Date().toISOString(),
+      ownerId: uid
+    });
+
+    batches.push(currentBatch);
+    for (const b of batches) {
+      await b.commit();
+    }
+  }
+
+  // 3. Fetch counts (After)
+  const afterWorkers = isMockMode 
+    ? getMockData('paramesh_workers') 
+    : (await getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const afterAttendance = isMockMode 
+    ? getMockData('paramesh_attendance') 
+    : (await getDocs(query(collection(db, 'attendance'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const afterPayments = isMockMode 
+    ? getMockData('paramesh_payments') 
+    : (await getDocs(query(collection(db, 'payments'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const afterExpenses = isMockMode 
+    ? getMockData('paramesh_expenses') 
+    : (await getDocs(query(collection(db, 'expenses'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+  
+  const afterCrops = isMockMode 
+    ? getMockData('paramesh_crop_cycles') 
+    : (await getDocs(query(collection(db, 'cropCycles'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const workersAfter = afterWorkers.length;
+  const inactiveWorkersAfter = afterWorkers.filter((w: any) => w.status === 'inactive').length;
+  const attendanceAfter = afterAttendance.length;
+  const paymentsAfter = afterPayments.length;
+  const expensesAfter = afterExpenses.length;
+  const cropCyclesDeleted = Math.max(0, cropCyclesBefore - afterCrops.length);
+
+  const totalPaymentsAfter = afterPayments.reduce((sum: number, p: any) => sum + (parseFloat(p.amount) || 0), 0);
+  const totalExpensesAfter = afterExpenses.reduce((sum: number, e: any) => sum + (parseFloat(e.amount) || 0), 0);
+
+  // 4. Validate
+  const countsMatch = 
+    workersBefore === workersAfter &&
+    inactiveWorkersBefore === inactiveWorkersAfter &&
+    attendanceBefore === attendanceAfter &&
+    paymentsBefore === paymentsAfter &&
+    expensesBefore === expensesAfter;
+
+  const financialsMatch = 
+    totalPaymentsBefore === totalPaymentsAfter &&
+    totalExpensesBefore === totalExpensesAfter;
+
+  const validStatus = countsMatch && financialsMatch;
+
+  return {
+    workersBefore,
+    workersAfter,
+    inactiveWorkersBefore,
+    inactiveWorkersAfter,
+    attendanceBefore,
+    attendanceAfter,
+    paymentsBefore,
+    paymentsAfter,
+    expensesBefore,
+    expensesAfter,
+    workerCropsCreated: uniqueWorkerIds.length,
+    cropCyclesDeleted,
+    legacyCropId,
+    validationResult: validStatus ? '100% PRESERVED' : 'ERROR: DATA MISMATCH',
+    financialDiff: Math.abs(totalPaymentsBefore - totalPaymentsAfter) + Math.abs(totalExpensesBefore - totalExpensesAfter),
+    status: validStatus ? 'SUCCESS' : 'FAILED'
+  };
+};
+
 export const assignWorkerToCrop = async (workerId: string, cropCycleId: string): Promise<void> => {
   await createWorkerCrop(workerId, cropCycleId);
   

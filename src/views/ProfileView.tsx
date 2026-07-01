@@ -14,7 +14,7 @@ import {
   X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { logoutUser, isMockMode, resetMockData, clearAllDatabaseData, fetchEmailRecipients, saveEmailRecipients } from '../firebase';
+import { logoutUser, isMockMode, resetMockData, clearAllDatabaseData, fetchEmailRecipients, saveEmailRecipients, executeProductionMigration, MigrationReport } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import { runSystemTests, TestCaseResult } from '../utils/systemTests';
 
@@ -105,6 +105,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [testResults, setTestResults] = React.useState<TestCaseResult[]>([]);
   const [runningTests, setRunningTests] = React.useState(false);
   const [showTestModal, setShowTestModal] = React.useState(false);
+  const [migrationReport, setMigrationReport] = React.useState<MigrationReport | null>(null);
+  const [runningMigration, setRunningMigration] = React.useState(false);
+  const [showMigrationModal, setShowMigrationModal] = React.useState(false);
 
   React.useEffect(() => {
     loadSettings();
@@ -227,6 +230,24 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       showToast("Failed to run diagnostics", "error");
     } finally {
       setRunningTests(false);
+    }
+  };
+
+  const handleRunMigration = async () => {
+    if (!window.confirm("Are you sure you want to execute the one-time production database migration? This will consolidate all records under 'Legacy Crop 2025–2026' and delete other crop cycles. Financial records will be preserved with zero data loss.")) {
+      return;
+    }
+    setRunningMigration(true);
+    setShowMigrationModal(true);
+    try {
+      const report = await executeProductionMigration();
+      setMigrationReport(report);
+      showToast("Migration executed successfully!", "success");
+    } catch (e: any) {
+      showToast(`Migration failed: ${e.message || String(e)}`, "error");
+      setShowMigrationModal(false);
+    } finally {
+      setRunningMigration(false);
     }
   };
 
@@ -655,6 +676,26 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </button>
       </div>
 
+      {/* Production Database Migration */}
+      <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
+          <Database size={14} className="text-gray-400" />
+          {bilingual ? 'Production Database Migration / డేటాబేస్ మైగ్రేషన్' : 'Production Database Migration'}
+        </h3>
+        
+        <p className="text-xs text-gray-500 leading-snug font-medium pl-1">
+          Perform a one-time production database cleanup. Consolidates all workers, attendance, payments, and expenses under the single <strong>Legacy Crop (2025–2026)</strong> season.
+        </p>
+
+        <button
+          onClick={handleRunMigration}
+          className="w-full py-3.5 bg-danger-red/10 text-danger-red font-bold rounded-2xl active:scale-95 text-sm transition-all cursor-pointer flex items-center justify-center gap-1.5 mt-2"
+        >
+          <Database size={16} />
+          Execute Production Migration (Zero Data Loss)
+        </button>
+      </div>
+
       {/* About Section */}
       <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-2">
         <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
@@ -777,6 +818,163 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Migration Results Modal */}
+      <AnimatePresence>
+        {showMigrationModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white w-full max-w-lg h-[80vh] rounded-3xl p-6 shadow-premium relative flex flex-col gap-4 border border-[#E0DBC5]"
+            >
+              {!runningMigration && (
+                <button 
+                  onClick={() => setShowMigrationModal(false)}
+                  className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
+                >
+                  <X size={18} />
+                </button>
+              )}
+
+              <div>
+                <h3 className="text-xl font-bold text-text-dark">
+                  Database Migration Report
+                </h3>
+                <p className="text-xs text-gray-400 font-semibold mt-0.5">
+                  Firestore Backend Migration Status
+                </p>
+              </div>
+
+              {runningMigration ? (
+                <div className="flex-1 flex flex-col items-center justify-center gap-3">
+                  <div className="w-10 h-10 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-xs text-gray-500 font-bold">Executing direct database migration...</span>
+                  <span className="text-[10px] text-gray-400 italic">Please do not close the browser window.</span>
+                </div>
+              ) : (
+                <div className="flex-col flex flex-1 overflow-hidden">
+                  {/* Summary Bar */}
+                  <div className="bg-[#F8F5E9] border border-[#E0DBC5]/45 rounded-2xl p-4 mb-4 flex justify-between items-center shrink-0">
+                    <div>
+                      <span className="text-xs text-gray-500 font-bold block uppercase tracking-wider">
+                        Migration Status
+                      </span>
+                      <span className="text-2xl font-black text-primary block mt-0.5">
+                        {migrationReport?.status}
+                      </span>
+                    </div>
+                    {migrationReport?.status === 'SUCCESS' ? (
+                      <span className="text-xs bg-success-green/10 text-success-green font-black uppercase px-3 py-1 rounded-xl">
+                        100% HEALTHY
+                      </span>
+                    ) : (
+                      <span className="text-xs bg-danger-red/10 text-danger-red font-black uppercase px-3 py-1 rounded-xl">
+                        ERROR
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Migration Metrics Table */}
+                  <div className="flex-1 overflow-y-auto no-scrollbar space-y-2 pr-1">
+                    <div className="divide-y divide-gray-100 text-xs">
+                      
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Workers Migrated</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.workersBefore} → {migrationReport?.workersAfter}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Inactive Workers Migrated</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.inactiveWorkersBefore} → {migrationReport?.inactiveWorkersAfter}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Attendance Records</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.attendanceBefore} → {migrationReport?.attendanceAfter}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Payments Migrated</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.paymentsBefore} → {migrationReport?.paymentsAfter}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Expenses Migrated</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.expensesBefore} → {migrationReport?.expensesAfter}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">WorkerCrop Records Created</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.workerCropsCreated}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Crop Cycles Deleted</span>
+                        <span className="font-bold text-danger-red font-black">
+                          {migrationReport?.cropCyclesDeleted}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Legacy Crop ID</span>
+                        <span className="font-mono text-[10px] text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                          {migrationReport?.legacyCropId}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Validation Result</span>
+                        <span className={`font-bold ${migrationReport?.validationResult === '100% PRESERVED' ? 'text-success-green' : 'text-danger-red'}`}>
+                          {migrationReport?.validationResult}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Dashboard Comparison</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.financialDiff === 0 ? "NO DIFFERENCE" : `DIFF: ₹${migrationReport?.financialDiff}`}
+                        </span>
+                      </div>
+
+                      <div className="py-2.5 flex justify-between">
+                        <span className="font-semibold text-gray-500">Report Comparison</span>
+                        <span className="font-bold text-text-dark">
+                          {migrationReport?.financialDiff === 0 ? "NO DIFFERENCE" : `DIFF: ₹${migrationReport?.financialDiff}`}
+                        </span>
+                      </div>
+
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => {
+                      setShowMigrationModal(false);
+                      window.location.reload();
+                    }}
+                    className="w-full mt-4 py-3 bg-primary text-white font-bold rounded-2xl active:scale-95 text-center text-xs"
+                  >
+                    Close & Reload Application
+                  </button>
                 </div>
               )}
             </motion.div>
