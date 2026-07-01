@@ -1046,354 +1046,56 @@ export const seedPresetWorkers = async (uid: string, email: string): Promise<voi
 
 export const migrateLegacyRecords = async (): Promise<void> => {
   const uid = getCurrentUserId();
-  if (!isMockMode && !uid) {
-    return;
-  }
   const email = getCurrentUserEmail();
-  const legacyCropId = 'legacy_crop_2025_2026';
-
-  // Seed preset workers if database is empty
-  await seedPresetWorkers(uid, email);
-
-  // Check completion flag
-  if (isMockMode) {
-    if (localStorage.getItem('paramesh_migration_completed_v3') === 'true') {
-      return;
-    }
-  } else {
-    try {
-      const migSnap = await getDoc(doc(db, 'migrations', `v3_${uid}`));
-      if (migSnap.exists() && migSnap.data()?.completed === true) {
-        return;
-      }
-    } catch (e) {
-      console.warn("Migration check error:", e);
-    }
-  }
-
-  console.log("Starting safe legacy data migration to v3.0...");
-
-  // Create backup
-  let backupWorkers: any[] = [];
-  let backupAttendance: any[] = [];
-  let backupPayments: any[] = [];
-  let backupExpenses: any[] = [];
-  let backupCropCycles: any[] = [];
-  let backupWorkerCrops: any[] = [];
-
-  if (isMockMode) {
-    backupWorkers = getMockData('paramesh_workers');
-    backupAttendance = getMockData('paramesh_attendance');
-    backupPayments = getMockData('paramesh_payments');
-    backupExpenses = getMockData('paramesh_expenses');
-    backupCropCycles = getMockData('paramesh_crop_cycles');
-    backupWorkerCrops = getMockData('paramesh_worker_crops');
-  } else {
-    try {
-      const wSnap = await getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid)));
-      wSnap.forEach(d => backupWorkers.push({ id: d.id, ...d.data() }));
-
-      const aSnap = await getDocs(query(collection(db, 'attendance'), where('ownerId', '==', uid)));
-      aSnap.forEach(d => backupAttendance.push({ id: d.id, ...d.data() }));
-
-      const pSnap = await getDocs(query(collection(db, 'payments'), where('ownerId', '==', uid)));
-      pSnap.forEach(d => backupPayments.push({ id: d.id, ...d.data() }));
-
-      const eSnap = await getDocs(query(collection(db, 'expenses'), where('ownerId', '==', uid)));
-      eSnap.forEach(d => backupExpenses.push({ id: d.id, ...d.data() }));
-
-      const cSnap = await getDocs(query(collection(db, 'cropCycles'), where('ownerId', '==', uid)));
-      cSnap.forEach(d => backupCropCycles.push({ id: d.id, ...d.data() }));
-
-      const wcSnap = await getDocs(query(collection(db, 'workerCrops'), where('ownerId', '==', uid)));
-      wcSnap.forEach(d => backupWorkerCrops.push({ id: d.id, ...d.data() }));
-    } catch (err) {
-      console.error("Backup fetch failed:", err);
-      throw new Error("Migration failed at backup fetch phase. No data modified.");
-    }
-  }
-
-  if (backupCropCycles.length > 0) {
-    console.log("Valid crop cycles already exist. Skipping legacy data migration.");
-    if (isMockMode) {
-      localStorage.setItem('paramesh_migration_completed_v3', 'true');
-    } else {
-      try {
-        await setDoc(doc(db, 'migrations', `v3_${uid}`), { completed: true, timestamp: new Date().toISOString(), ownerId: uid });
-      } catch (e) {}
-    }
-    return;
-  }
-
-  const legacyCrop: CropCycle = {
-    id: legacyCropId,
-    cropName: 'Legacy Crop',
-    variety: 'Legacy',
-    season: '2025–2026',
-    landName: 'Legacy Land',
-    area: 'Various',
-    irrigationType: 'Other',
-    startDate: '2025-06-01',
-    expectedHarvestDate: '2026-03-31',
-    actualHarvestDate: '2026-03-31',
-    status: 'active',
-    notes: 'Auto-generated for legacy records.',
-    ownerId: uid,
-    ownerEmail: email,
-    createdAt: new Date().toISOString()
-  };
-
-  // Find all unique worker IDs to associate them
-  const workerIdsSet = new Set<string>();
-  backupAttendance.forEach(a => workerIdsSet.add(a.workerId));
-  backupPayments.forEach(p => workerIdsSet.add(p.workerId));
-  backupWorkers.forEach(w => workerIdsSet.add(w.id));
-  const uniqueWorkerIds = Array.from(workerIdsSet);
-
-  try {
-    if (isMockMode) {
-      // 1. Create crop cycle (replacing temporary ones)
-      setMockData('paramesh_crop_cycles', [legacyCrop]);
-
-      // 2. Create WorkerCrop relationships
-      const newWorkerCrops = uniqueWorkerIds.map(wId => ({
-        id: `wc_${wId}_${legacyCropId}`,
-        workerId: wId,
-        cropCycleId: legacyCropId,
-        ownerId: uid,
-        ownerEmail: email,
-        createdAt: new Date().toISOString()
-      }));
-      setMockData('paramesh_worker_crops', newWorkerCrops);
-
-      // 3. Update attendance
-      const newAttendance = backupAttendance.map(a => ({
-        ...a,
-        cropCycleId: legacyCropId
-      }));
-      setMockData('paramesh_attendance', newAttendance);
-
-      // 4. Update payments
-      const newPayments = backupPayments.map(p => ({
-        ...p,
-        cropCycleId: legacyCropId
-      }));
-      setMockData('paramesh_payments', newPayments);
-
-      // 5. Update expenses
-      const newExpenses = backupExpenses.map(e => ({
-        ...e,
-        cropCycleId: legacyCropId
-      }));
-      setMockData('paramesh_expenses', newExpenses);
-
-      // Mark migration complete
-      localStorage.setItem('paramesh_migration_completed_v3', 'true');
-      console.log("Migration completed successfully in Mock Mode.");
-    } else {
-      // Firestore batch migration
-      const batches: any[] = [];
-      let currentBatch = writeBatch(db);
-      let opCount = 0;
-
-      const addOp = (action: 'set' | 'update' | 'delete', ref: any, data?: any) => {
-        if (opCount >= 400) {
-          batches.push(currentBatch);
-          currentBatch = writeBatch(db);
-          opCount = 0;
-        }
-        if (action === 'set') {
-          currentBatch.set(ref, data);
-        } else if (action === 'update') {
-          currentBatch.update(ref, data);
-        } else if (action === 'delete') {
-          currentBatch.delete(ref);
-        }
-        opCount++;
-      };
-
-      // 1. Set Legacy Crop Cycle
-      addOp('set', doc(db, 'cropCycles', legacyCropId), legacyCrop);
-
-      // 2. Delete all other crop cycles
-      backupCropCycles.forEach(c => {
-        if (c.id !== legacyCropId) {
-          addOp('delete', doc(db, 'cropCycles', c.id));
-        }
-      });
-
-      // 3. Create WorkerCrop relationships
-      uniqueWorkerIds.forEach(wId => {
-        const wcId = `wc_${wId}_${legacyCropId}`;
-        addOp('set', doc(db, 'workerCrops', wcId), {
-          id: wcId,
-          workerId: wId,
-          cropCycleId: legacyCropId,
-          ownerId: uid,
-          ownerEmail: email,
-          createdAt: new Date().toISOString()
-        });
-      });
-
-      // 4. Update attendance
-      backupAttendance.forEach(a => {
-        const aId = a.id || `${a.workerId}_${a.date}`;
-        addOp('update', doc(db, 'attendance', aId), { cropCycleId: legacyCropId });
-      });
-
-      // 5. Update payments
-      backupPayments.forEach(p => {
-        addOp('update', doc(db, 'payments', p.id), { cropCycleId: legacyCropId });
-      });
-
-      // 6. Update expenses
-      backupExpenses.forEach(e => {
-        addOp('update', doc(db, 'expenses', e.id), { cropCycleId: legacyCropId });
-      });
-
-      // 7. Write migration record
-      addOp('set', doc(db, 'migrations', `v3_${uid}`), {
-        completed: true,
-        timestamp: new Date().toISOString(),
-        ownerId: uid
-      });
-
-      batches.push(currentBatch);
-
-      // Commit all batches
-      for (const batch of batches) {
-        await batch.commit();
-      }
-      console.log("Migration completed successfully in Firestore Mode.");
-    }
-  } catch (err: any) {
-    if (err && (err.code === 'permission-denied' || (err.message && err.message.includes('permission')))) {
-      console.warn("CRITICAL WARNING: Firestore security rules returned 'permission-denied'. Please check your Firebase Console rules. Ensure authenticated users have read/write access.");
-    }
-    console.error("Migration failed, rolling back to backup state...", err);
-    // Rollback logic
-    if (isMockMode) {
-      setMockData('paramesh_workers', backupWorkers);
-      setMockData('paramesh_attendance', backupAttendance);
-      setMockData('paramesh_payments', backupPayments);
-      setMockData('paramesh_expenses', backupExpenses);
-      setMockData('paramesh_crop_cycles', backupCropCycles);
-      setMockData('paramesh_worker_crops', backupWorkerCrops);
-      localStorage.removeItem('paramesh_migration_completed_v3');
-    } else {
-      try {
-        const rollbackBatches: any[] = [];
-        let currentRollbackBatch = writeBatch(db);
-        let rollbackOpCount = 0;
-
-        const addRollbackOp = (action: 'set' | 'delete', ref: any, data?: any) => {
-          if (rollbackOpCount >= 400) {
-            rollbackBatches.push(currentRollbackBatch);
-            currentRollbackBatch = writeBatch(db);
-            rollbackOpCount = 0;
-          }
-          if (action === 'set') {
-            currentRollbackBatch.set(ref, data);
-          } else if (action === 'delete') {
-            currentRollbackBatch.delete(ref);
-          }
-          rollbackOpCount++;
-        };
-
-        // Delete newly created migration docs
-        addRollbackOp('delete', doc(db, 'cropCycles', legacyCropId));
-        uniqueWorkerIds.forEach(wId => {
-          addRollbackOp('delete', doc(db, 'workerCrops', `wc_${wId}_${legacyCropId}`));
-        });
-        addRollbackOp('delete', doc(db, 'migrations', `v3_${uid}`));
-
-        // Overwrite and restore attendance
-        backupAttendance.forEach(a => {
-          const aId = a.id || `${a.workerId}_${a.date}`;
-          addRollbackOp('set', doc(db, 'attendance', aId), a);
-        });
-
-        // Overwrite and restore payments
-        backupPayments.forEach(p => {
-          addRollbackOp('set', doc(db, 'payments', p.id), p);
-        });
-
-        // Overwrite and restore expenses
-        backupExpenses.forEach(e => {
-          addRollbackOp('set', doc(db, 'expenses', e.id), e);
-        });
-
-        // Restore original crop cycles
-        backupCropCycles.forEach(c => {
-          addRollbackOp('set', doc(db, 'cropCycles', c.id), c);
-        });
-
-        rollbackBatches.push(currentRollbackBatch);
-
-        for (const rBatch of rollbackBatches) {
-          await rBatch.commit();
-        }
-        console.log("Database successfully rolled back to pre-migration state.");
-      } catch (rollbackErr) {
-        console.error("CRITICAL ERROR: Migration rollback failed!", rollbackErr);
-      }
-    }
-  }
-};
-
-export interface MigrationReport {
-  workersBefore: number;
-  workersAfter: number;
-  inactiveWorkersBefore: number;
-  inactiveWorkersAfter: number;
-  attendanceBefore: number;
-  attendanceAfter: number;
-  paymentsBefore: number;
-  paymentsAfter: number;
-  expensesBefore: number;
-  expensesAfter: number;
-  workerCropsCreated: number;
-  cropCyclesDeleted: number;
-  legacyCropId: string;
-  validationResult: string;
-  financialDiff: number;
-  status: 'SUCCESS' | 'FAILED';
-}
-
-export const executeProductionMigration = async (): Promise<MigrationReport> => {
-  const uid = getCurrentUserId();
-  const email = getCurrentUserEmail();
-  if (!uid) {
-    throw new Error("User must be authenticated to run migration.");
-  }
+  if (!uid) return;
 
   const legacyCropId = 'legacy_crop_2025_2026';
   const createdAt = new Date().toISOString();
 
-  // 1. Fetch current counts (Before) and filter by ownerId for multi-tenant safety
-  const rawWorkers = isMockMode 
-    ? getMockData('paramesh_workers').filter((w: any) => w.ownerId === uid) 
-    : (await getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Worker));
-  
-  const rawAttendance = isMockMode 
-    ? getMockData('paramesh_attendance').filter((a: any) => a.ownerId === uid) 
-    : (await getDocs(query(collection(db, 'attendance'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord));
-  
-  const rawPayments = isMockMode 
-    ? getMockData('paramesh_payments').filter((p: any) => p.ownerId === uid) 
-    : (await getDocs(query(collection(db, 'payments'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Payment));
-  
-  const rawExpenses = isMockMode 
-    ? getMockData('paramesh_expenses').filter((e: any) => e.ownerId === uid) 
-    : (await getDocs(query(collection(db, 'expenses'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Expense));
-  
-  const rawCrops = isMockMode 
-    ? getMockData('paramesh_crop_cycles').filter((c: any) => c.ownerId === uid) 
-    : (await getDocs(query(collection(db, 'cropCycles'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as CropCycle));
+  // Check completion flag for v4 backend reset
+  if (isMockMode) {
+    if (localStorage.getItem('paramesh_reset_completed_v4') === 'true') {
+      return;
+    }
+  } else {
+    try {
+      const resetSnap = await getDoc(doc(db, 'migrations', `v4_${uid}`));
+      if (resetSnap.exists() && resetSnap.data()?.completed === true) {
+        return;
+      }
+    } catch (e) {
+      console.warn("Reset check error:", e);
+    }
+  }
 
-  const rawWorkerCrops = isMockMode
-    ? getMockData('paramesh_worker_crops').filter((wc: any) => wc.ownerId === uid)
-    : (await getDocs(query(collection(db, 'workerCrops'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as WorkerCrop));
+  console.log("Executing one-time backend Crop Cycle Reset...");  // 1. Fetch current data (Before) and filter by ownerId for safety
+  let rawWorkers: Worker[] = [];
+  let rawAttendance: AttendanceRecord[] = [];
+  let rawPayments: Payment[] = [];
+  let rawExpenses: Expense[] = [];
+  let rawCrops: CropCycle[] = [];
+  let rawWorkerCrops: WorkerCrop[] = [];
+
+  if (isMockMode) {
+    rawWorkers = getMockData('paramesh_workers').filter((w: any) => w.ownerId === uid);
+    rawAttendance = getMockData('paramesh_attendance').filter((a: any) => a.ownerId === uid);
+    rawPayments = getMockData('paramesh_payments').filter((p: any) => p.ownerId === uid);
+    rawExpenses = getMockData('paramesh_expenses').filter((e: any) => e.ownerId === uid);
+    rawCrops = getMockData('paramesh_crop_cycles').filter((c: any) => c.ownerId === uid);
+    rawWorkerCrops = getMockData('paramesh_worker_crops').filter((wc: any) => wc.ownerId === uid);
+  } else {
+    try {
+      rawWorkers = (await getDocs(query(collection(db, 'workers'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Worker));
+      rawAttendance = (await getDocs(query(collection(db, 'attendance'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as AttendanceRecord));
+      rawPayments = (await getDocs(query(collection(db, 'payments'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Payment));
+      rawExpenses = (await getDocs(query(collection(db, 'expenses'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as Expense));
+      rawCrops = (await getDocs(query(collection(db, 'cropCycles'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as CropCycle));
+      rawWorkerCrops = (await getDocs(query(collection(db, 'workerCrops'), where('ownerId', '==', uid)))).docs.map(d => ({ id: d.id, ...d.data() } as WorkerCrop));
+    } catch (err) {
+      console.error("Backup fetch failed:", err);
+      throw new Error("Reset failed at fetch phase. No data modified.");
+    }
+  }
 
   const workersBefore = rawWorkers.length;
   const inactiveWorkersBefore = rawWorkers.filter((w: any) => w.status === 'inactive').length;
@@ -1402,6 +1104,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
   const expensesBefore = rawExpenses.length;
   const cropCyclesBefore = rawCrops.length;
 
+  // Calculate pre-reset financial totals
   const calculateEarnedTotal = (workersList: Worker[], attendanceList: AttendanceRecord[]): number => {
     return workersList.reduce((sum, w) => sum + calculateWorkerEarnings(w, attendanceList), 0);
   };
@@ -1419,7 +1122,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
   const pendingTotalBefore = earnedTotalBefore - paidTotalBefore;
   const expenseTotalBefore = calculateExpenseTotal(rawExpenses);
 
-  // 2. Perform Pre-flight Simulation & Validation
+  // 2. Pre-flight Simulation
   const simulatedAttendance = rawAttendance.map(a => ({
     ...a,
     cropCycleId: legacyCropId
@@ -1433,8 +1136,8 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
     cropCycleId: legacyCropId
   }));
 
-  const workersAfterSim = rawWorkers.length;
-  const inactiveWorkersAfterSim = rawWorkers.filter((w: any) => w.status === 'inactive').length;
+  const workersAfterSim = workersBefore;
+  const inactiveWorkersAfterSim = inactiveWorkersBefore;
   const attendanceAfterSim = simulatedAttendance.length;
   const paymentsAfterSim = simulatedPayments.length;
   const expensesAfterSim = simulatedExpenses.length;
@@ -1461,7 +1164,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
 
   if (!preflightSuccess) {
     throw new Error(
-      `Pre-flight migration validation failed. Totals mismatch. ` +
+      `Pre-flight Crop Cycle Reset validation failed. Totals mismatch. ` +
       `Workers: ${workersBefore} vs ${workersAfterSim}, ` +
       `Attendance: ${attendanceBefore} vs ${attendanceAfterSim}, ` +
       `Payments: ${paymentsBefore} vs ${paymentsAfterSim}, ` +
@@ -1470,7 +1173,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
       `Paid: ${paidTotalBefore} vs ${paidTotalAfterSim}, ` +
       `Pending: ${pendingTotalBefore} vs ${pendingTotalAfterSim}, ` +
       `Expense Total: ${expenseTotalBefore} vs ${expenseTotalAfterSim}. ` +
-      `Migration aborted.`
+      `Reset aborted.`
     );
   }
 
@@ -1491,8 +1194,8 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
     startDate: '2025-06-01',
     expectedHarvestDate: '2026-03-31',
     actualHarvestDate: '2026-03-31',
-    status: 'completed', // Reset to 'completed' status explicitly requested by migration specs
-    notes: 'One-time legacy production migration.',
+    status: 'completed',
+    notes: 'One-time legacy backend Crop Cycle Reset.',
     ownerId: uid,
     ownerEmail: email,
     createdAt,
@@ -1500,7 +1203,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
   };
 
   const runRollback = async () => {
-    console.warn("Rolling back database to pre-migration backup state...");
+    console.warn("Rolling back database to pre-reset backup state...");
     if (isMockMode) {
       const allCrops = getMockData('paramesh_crop_cycles').filter((c: any) => c.ownerId !== uid);
       setMockData('paramesh_crop_cycles', [...allCrops, ...rawCrops]);
@@ -1517,7 +1220,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
       const allExpenses = getMockData('paramesh_expenses').filter((e: any) => e.ownerId !== uid);
       setMockData('paramesh_expenses', [...allExpenses, ...rawExpenses]);
 
-      localStorage.removeItem('paramesh_migration_completed_v3');
+      localStorage.removeItem('paramesh_reset_completed_v4');
     } else {
       try {
         const rollbackBatches: any[] = [];
@@ -1543,7 +1246,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
         uniqueWorkerIds.forEach(wId => {
           addRbOp('delete', doc(db, 'workerCrops', `wc_${wId}_${legacyCropId}`));
         });
-        addRbOp('delete', doc(db, 'migrations', `v3_${uid}`));
+        addRbOp('delete', doc(db, 'migrations', `v4_${uid}`));
 
         // Restore original crop cycles
         rawCrops.forEach(c => {
@@ -1557,7 +1260,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
 
         // Restore original attendance
         rawAttendance.forEach(a => {
-          addRbOp('set', doc(db, 'attendance', a.id), a);
+          addRbOp('set', doc(db, 'attendance', a.id as string), a);
         });
 
         // Restore original payments
@@ -1575,7 +1278,7 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
           await rb.commit();
         }
       } catch (rollbackErr) {
-        console.error("CRITICAL ERROR: Rollback execution failed!", rollbackErr);
+        console.error("CRITICAL ERROR: Reset rollback failed!", rollbackErr);
       }
     }
   };
@@ -1627,10 +1330,10 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
       }));
       setMockData('paramesh_expenses', [...otherExpenses, ...newExpenses]);
 
-      localStorage.setItem('paramesh_migration_completed_v3', 'true');
+      localStorage.setItem('paramesh_reset_completed_v4', 'true');
       localStorage.setItem('paramesh_selected_crop_cycle_id', legacyCropId);
     } else {
-      // Firestore batch migration
+      // Firestore batch reset
       const batches: any[] = [];
       let currentBatch = writeBatch(db);
       let opCount = 0;
@@ -1779,24 +1482,12 @@ export const executeProductionMigration = async (): Promise<MigrationReport> => 
     );
   }
 
-  return {
-    workersBefore,
-    workersAfter,
-    inactiveWorkersBefore,
-    inactiveWorkersAfter,
-    attendanceBefore,
-    attendanceAfter,
-    paymentsBefore,
-    paymentsAfter,
-    expensesBefore,
-    expensesAfter,
-    workerCropsCreated: uniqueWorkerIds.length,
-    cropCyclesDeleted,
-    legacyCropId,
-    validationResult: '100% PRESERVED',
-    financialDiff: 0,
-    status: 'SUCCESS'
-  };
+  console.log("Crop Cycle Reset executed successfully. Reloading views...");
+  setTimeout(() => {
+    if (typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  }, 1000);
 };
 
 export const assignWorkerToCrop = async (workerId: string, cropCycleId: string): Promise<void> => {
