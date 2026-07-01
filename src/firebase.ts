@@ -1863,47 +1863,47 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
     };
 
     try {
-      let currentBatch = writeBatch(db);
-      let opCount = 0;
+      const commitInChunks = async <T>(
+        items: T[],
+        stepKey: 'workers' | 'attendance' | 'payments' | 'expenses',
+        writeFn: (batch: WriteBatch, item: T) => string
+      ) => {
+        const chunkSize = 100;
+        onProgress(stepKey, 0, items.length);
 
-      const commitCurrentBatch = async () => {
-        if (opCount > 0) {
-          await currentBatch.commit();
-          currentBatch = writeBatch(db);
-          opCount = 0;
-        }
-      };
-
-      const addWrite = async (collectionName: string, docId: string, data: any, stepKey: any, currentCount: number, totalCount: number) => {
-        const ref = doc(db, collectionName, docId);
-        currentBatch.set(ref, data);
-        createdPaths.push(`${collectionName}/${docId}`);
-        opCount++;
-
-        if (opCount >= 100) {
-          await commitCurrentBatch();
-          onProgress(stepKey, currentCount, totalCount);
+        for (let i = 0; i < items.length; i += chunkSize) {
+          const chunk = items.slice(i, i + chunkSize);
+          const batch = writeBatch(db);
+          
+          for (const item of chunk) {
+            const path = writeFn(batch, item);
+            createdPaths.push(path);
+          }
+          
+          await batch.commit();
+          
+          const current = Math.min(i + chunkSize, items.length);
+          onProgress(stepKey, current, items.length);
         }
       };
 
       // 1. Create Crop
       onProgress('creating', 0, 1);
       const cropRef = doc(db, 'cropCycles', newCropId);
-      currentBatch.set(cropRef, newCropCycleDoc);
+      const startBatch = writeBatch(db);
+      startBatch.set(cropRef, newCropCycleDoc);
       createdPaths.push(`cropCycles/${newCropId}`);
-      opCount++;
-      await commitCurrentBatch();
+      await startBatch.commit();
       onProgress('creating', 1, 1);
 
       // 2. Link Workers
       if (copyWorkers) {
-        onProgress('workers', 0, rawWorkers.length);
-        for (let i = 0; i < rawWorkers.length; i++) {
-          const w = rawWorkers[i];
+        await commitInChunks(rawWorkers, 'workers', (batch, w) => {
           const wcId = `wc_${w.id}_${newCropId}`;
           const sourceWc = sourceWorkerCrops.find(wc => wc.workerId === w.id);
           const wcNotes = (copyWorkerNotes && sourceWc) ? sourceWc.notes : null;
-          await addWrite('workerCrops', wcId, {
+          const ref = doc(db, 'workerCrops', wcId);
+          batch.set(ref, {
             id: wcId,
             workerId: w.id,
             cropCycleId: newCropId,
@@ -1911,61 +1911,54 @@ export const rebuildCropCycleWithData = async (options: RebuildCropCycleOptions)
             ownerEmail: email,
             createdAt,
             notes: wcNotes
-          }, 'workers', i + 1, rawWorkers.length);
-        }
-        await commitCurrentBatch();
-        onProgress('workers', rawWorkers.length, rawWorkers.length);
+          });
+          return `workerCrops/${wcId}`;
+        });
       }
 
       // 3. Copy Attendance
       if (copyAttendance) {
-        onProgress('attendance', 0, rawAttendance.length);
-        for (let i = 0; i < rawAttendance.length; i++) {
-          const a = rawAttendance[i];
+        await commitInChunks(rawAttendance, 'attendance', (batch, a) => {
           const newAttId = doc(collection(db, 'attendance')).id;
-          await addWrite('attendance', newAttId, {
+          const ref = doc(db, 'attendance', newAttId);
+          batch.set(ref, {
             ...a,
             id: newAttId,
             cropCycleId: newCropId,
             createdAt
-          }, 'attendance', i + 1, rawAttendance.length);
-        }
-        await commitCurrentBatch();
-        onProgress('attendance', rawAttendance.length, rawAttendance.length);
+          });
+          return `attendance/${newAttId}`;
+        });
       }
 
       // 4. Copy Payments
       if (copyPayments) {
-        onProgress('payments', 0, rawPayments.length);
-        for (let i = 0; i < rawPayments.length; i++) {
-          const p = rawPayments[i];
+        await commitInChunks(rawPayments, 'payments', (batch, p) => {
           const newPayId = doc(collection(db, 'payments')).id;
-          await addWrite('payments', newPayId, {
+          const ref = doc(db, 'payments', newPayId);
+          batch.set(ref, {
             ...p,
             id: newPayId,
             cropCycleId: newCropId,
             createdAt
-          }, 'payments', i + 1, rawPayments.length);
-        }
-        await commitCurrentBatch();
-        onProgress('payments', rawPayments.length, rawPayments.length);
+          });
+          return `payments/${newPayId}`;
+        });
       }
 
       // 5. Copy Expenses
       if (copyExpenses) {
-        onProgress('expenses', 0, rawExpenses.length);
-        for (let i = 0; i < rawExpenses.length; i++) {
-          const e = rawExpenses[i];
+        await commitInChunks(rawExpenses, 'expenses', (batch, e) => {
           const newExpId = doc(collection(db, 'expenses')).id;
-          await addWrite('expenses', newExpId, {
+          const ref = doc(db, 'expenses', newExpId);
+          batch.set(ref, {
             ...e,
             id: newExpId,
             cropCycleId: newCropId,
             createdAt
-          }, 'expenses', i + 1, rawExpenses.length);
-        }
-        await commitCurrentBatch();
-        onProgress('expenses', rawExpenses.length, rawExpenses.length);
+          });
+          return `expenses/${newExpId}`;
+        });
       }
 
       onProgress('dashboard', 0, 0);
