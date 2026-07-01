@@ -186,7 +186,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
         amount: amtNum,
         date,
         note: note.trim() || 'Wage Payment',
-        cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
+        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
       });
 
       showToast("Payment recorded successfully!", "success");

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Home, 
@@ -12,11 +12,9 @@ import {
   Lock, 
   Mail, 
   Globe,
-  Sparkles,
   ChevronDown,
   Plus,
   Check,
-  Calendar,
   X
 } from 'lucide-react';
 import { 
@@ -24,7 +22,6 @@ import {
   signInWithEmail,
   subscribeToAuthChanges,
   AppUser, 
-  isMockMode,
   fetchWorkers,
   fetchPayments,
   fetchAttendance,
@@ -32,7 +29,12 @@ import {
   CropCycle,
   fetchCropCycles,
   createCropCycle,
-  filterByCrop
+  filterByCrop,
+  migrateLegacyRecords,
+  saveAttendanceList,
+  createPayment,
+  createExpense,
+  fetchExpenses
 } from './firebase';
 import { t, subT, Language } from './utils/translation';
 
@@ -73,9 +75,9 @@ export default function App() {
   const [newCropExpectedHarvestDate, setNewCropExpectedHarvestDate] = useState('');
   const [newCropNotes, setNewCropNotes] = useState('');
   const [copyWorkersFlag, setCopyWorkersFlag] = useState(true);
-  const [emptyAttendanceFlag, setEmptyAttendanceFlag] = useState(true);
-  const [emptyPaymentsFlag, setEmptyPaymentsFlag] = useState(true);
-  const [emptyExpensesFlag, setEmptyExpensesFlag] = useState(true);
+  const [copyAttendanceFlag, setCopyAttendanceFlag] = useState(false);
+  const [copyPaymentsFlag, setCopyPaymentsFlag] = useState(false);
+  const [copyExpensesFlag, setCopyExpensesFlag] = useState(false);
   const [savingCrop, setSavingCrop] = useState(false);
   
   // Toast notifications state
@@ -105,30 +107,33 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const loadCropCycles = async () => {
+  const loadCropCycles = useCallback(async () => {
     try {
+      await migrateLegacyRecords();
       const list = await fetchCropCycles();
       setCropCycles(list);
+      
+      const savedSelectedId = localStorage.getItem('paramesh_selected_crop_cycle_id');
+      
+      if (!savedSelectedId || savedSelectedId === 'all' || !list.some(c => c.id === savedSelectedId)) {
+        const firstActive = list.find(c => c.status === 'active');
+        if (firstActive) {
+          setSelectedCropCycleId(firstActive.id);
+          localStorage.setItem('paramesh_selected_crop_cycle_id', firstActive.id);
+        } else if (list.length > 0) {
+          setSelectedCropCycleId(list[0].id);
+          localStorage.setItem('paramesh_selected_crop_cycle_id', list[0].id);
+        } else {
+          setSelectedCropCycleId('all');
+          localStorage.setItem('paramesh_selected_crop_cycle_id', 'all');
+        }
+      }
     } catch (e) {
       console.error("Error loading crop cycles:", e);
     }
-  };
+  }, []);
 
-  // Load Crop Cycles on login
-  useEffect(() => {
-    if (currentUser) {
-      loadCropCycles();
-    }
-  }, [currentUser]);
-
-  // Update pending wages count whenever database changes, view swaps, or crop selection changes
-  useEffect(() => {
-    if (currentUser) {
-      updatePendingWagesCount();
-    }
-  }, [currentView, currentUser, selectedCropCycleId]);
-
-  const updatePendingWagesCount = async () => {
+  const updatePendingWagesCount = useCallback(async () => {
     try {
       const workersData = await fetchWorkers();
       let paymentsData = await fetchPayments();
@@ -156,7 +161,21 @@ export default function App() {
     } catch (e) {
       console.error(e);
     }
-  };
+  }, [selectedCropCycleId]);
+
+  // Load Crop Cycles on login
+  useEffect(() => {
+    if (currentUser) {
+      loadCropCycles();
+    }
+  }, [currentUser, loadCropCycles]);
+
+  // Update pending wages count whenever database changes, view swaps, or crop selection changes
+  useEffect(() => {
+    if (currentUser) {
+      updatePendingWagesCount();
+    }
+  }, [currentView, currentUser, updatePendingWagesCount]);
 
   const handleLanguageChange = (newLang: Language) => {
     setLang(newLang);
@@ -250,6 +269,74 @@ export default function App() {
       };
 
       const newId = await createCropCycle(newCycle);
+
+      // Copy Attendance if selected
+      if (copyAttendanceFlag) {
+        try {
+          const allAtt = await fetchAttendance();
+          const cropAtt = filterByCrop(allAtt, selectedCropCycleId);
+          const attByDate: Record<string, Omit<AttendanceRecord, 'id'>[]> = {};
+          cropAtt.forEach(a => {
+            if (!attByDate[a.date]) {
+              attByDate[a.date] = [];
+            }
+            attByDate[a.date].push({
+              workerId: a.workerId,
+              date: a.date,
+              status: a.status,
+              wageForDay: a.wageForDay,
+              workType: a.workType,
+              notes: a.notes,
+              cropCycleId: newId
+            });
+          });
+          for (const [date, records] of Object.entries(attByDate)) {
+            await saveAttendanceList(date, records);
+          }
+        } catch (e) {
+          console.error("Failed to copy attendance:", e);
+        }
+      }
+
+      // Copy Payments if selected
+      if (copyPaymentsFlag) {
+        try {
+          const allPayments = await fetchPayments();
+          const cropPayments = filterByCrop(allPayments, selectedCropCycleId);
+          for (const p of cropPayments) {
+            await createPayment({
+              workerId: p.workerId,
+              amount: p.amount,
+              date: p.date,
+              note: p.note,
+              cropCycleId: newId
+            });
+          }
+        } catch (e) {
+          console.error("Failed to copy payments:", e);
+        }
+      }
+
+      // Copy Expenses if selected
+      if (copyExpensesFlag) {
+        try {
+          const allExpenses = await fetchExpenses();
+          const cropExpenses = filterByCrop(allExpenses, selectedCropCycleId);
+          for (const e of cropExpenses) {
+            await createExpense({
+              category: e.category,
+              amount: e.amount,
+              description: e.description,
+              notes: e.notes,
+              date: e.date,
+              cropCycleId: newId
+            });
+          }
+        } catch (e) {
+          console.error("Failed to copy expenses:", e);
+        }
+      }
+
       showToast("Crop cycle created successfully!", "success");
       
       // Refresh list
@@ -605,7 +692,10 @@ export default function App() {
                         ? t('allCrops', lang) 
                         : selectedCropCycleId === 'legacy'
                           ? t('legacyRecords', lang)
-                          : cropCycles.find(c => c.id === selectedCropCycleId)?.cropName || 'All Crops'
+                          : (() => {
+                              const c = cropCycles.find(c => c.id === selectedCropCycleId);
+                              return c ? `${c.cropName} (${c.season})` : 'All Crops';
+                            })()
                       }
                     </span>
                   </div>
@@ -657,8 +747,8 @@ export default function App() {
                             className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === crop.id ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
                           >
                             <div className="min-w-0 flex-1">
-                              <span className="block font-bold truncate">{crop.cropName}</span>
-                              <span className="block text-[9px] text-gray-400 font-semibold">{crop.season} • {crop.area}</span>
+                              <span className="block font-bold truncate">{crop.cropName} ({crop.season})</span>
+                              <span className="block text-[9px] text-gray-400 font-semibold">{crop.area || '0 Acres'} • {crop.status === 'completed' ? 'Completed' : 'Active'}</span>
                             </div>
                             {selectedCropCycleId === crop.id && <Check size={12} className="text-primary" />}
                           </button>
@@ -678,9 +768,9 @@ export default function App() {
                             setNewCropExpectedHarvestDate('');
                             setNewCropNotes('');
                             setCopyWorkersFlag(true);
-                            setEmptyAttendanceFlag(true);
-                            setEmptyPaymentsFlag(true);
-                            setEmptyExpensesFlag(true);
+                            setCopyAttendanceFlag(false);
+                            setCopyPaymentsFlag(false);
+                            setCopyExpensesFlag(false);
                             setShowNewCropModal(true);
                           }}
                           className="w-full py-2 bg-primary/10 text-primary font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 hover:bg-primary/15 transition-all cursor-pointer"
@@ -938,40 +1028,37 @@ export default function App() {
                       onChange={(e) => setCopyWorkersFlag(e.target.checked)}
                       className="rounded text-primary focus:ring-primary w-4 h-4"
                     />
-                    <span>{t('copyWorkers', lang)}</span>
+                    <span>{t('importWorkers', lang)}</span>
                   </label>
                   
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
                     <input
                       type="checkbox"
-                      disabled
-                      checked={emptyAttendanceFlag}
-                      onChange={(e) => setEmptyAttendanceFlag(e.target.checked)}
-                      className="rounded text-primary focus:ring-primary w-4 h-4 bg-gray-100"
+                      checked={copyAttendanceFlag}
+                      onChange={(e) => setCopyAttendanceFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4"
                     />
-                    <span className="text-gray-400">{t('startEmptyAttendance', lang)}</span>
+                    <span>{t('copyAttendance', lang)}</span>
                   </label>
 
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
                     <input
                       type="checkbox"
-                      disabled
-                      checked={emptyPaymentsFlag}
-                      onChange={(e) => setEmptyPaymentsFlag(e.target.checked)}
-                      className="rounded text-primary focus:ring-primary w-4 h-4 bg-gray-100"
+                      checked={copyPaymentsFlag}
+                      onChange={(e) => setCopyPaymentsFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4"
                     />
-                    <span className="text-gray-400">{t('startEmptyPayments', lang)}</span>
+                    <span>{t('copyPayments', lang)}</span>
                   </label>
 
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
                     <input
                       type="checkbox"
-                      disabled
-                      checked={emptyExpensesFlag}
-                      onChange={(e) => setEmptyExpensesFlag(e.target.checked)}
-                      className="rounded text-primary focus:ring-primary w-4 h-4 bg-gray-100"
+                      checked={copyExpensesFlag}
+                      onChange={(e) => setCopyExpensesFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4"
                     />
-                    <span className="text-gray-400">{t('startEmptyExpenses', lang)}</span>
+                    <span>{t('copyExpenses', lang)}</span>
                   </label>
                 </div>
 

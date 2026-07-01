@@ -194,7 +194,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           wageForDay,
           workType: registerWorkTypes[workerId] || '',
           notes: registerNotes[workerId] || '',
-          cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
+          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
         };
       });
 

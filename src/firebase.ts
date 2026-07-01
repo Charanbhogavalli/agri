@@ -48,7 +48,7 @@ export interface AttendanceRecord {
   wageForDay?: number;
   workType?: string;
   notes?: string;
-  cropCycleId?: string;
+  cropCycleId: string;
   createdAt?: string;
 }
 
@@ -60,7 +60,7 @@ export interface Payment {
   amount: number;
   date: string; // YYYY-MM-DD
   note: string;
-  cropCycleId?: string;
+  cropCycleId: string;
   createdAt: string;
 }
 
@@ -73,7 +73,7 @@ export interface Expense {
   description: string;
   notes: string;
   date: string; // YYYY-MM-DD;
-  cropCycleId?: string;
+  cropCycleId: string;
   createdAt: string;
 }
 
@@ -365,8 +365,10 @@ export const saveAttendanceList = async (date: string, records: Omit<AttendanceR
   if (isMockMode) {
     const att = getMockData('paramesh_attendance');
     for (const r of records) {
-      const docId = `att_${r.workerId}_${date}`;
-      const index = att.findIndex((a: any) => a.id === docId || (a.workerId === r.workerId && a.date === date));
+      const docId = r.cropCycleId 
+        ? `att_${r.workerId}_${r.cropCycleId}_${date}`
+        : `att_${r.workerId}_${date}`;
+      const index = att.findIndex((a: any) => a.id === docId || (a.workerId === r.workerId && a.date === date && a.cropCycleId === r.cropCycleId));
       if (index !== -1) {
         att[index] = { ...att[index], ...r };
       } else {
@@ -377,9 +379,11 @@ export const saveAttendanceList = async (date: string, records: Omit<AttendanceR
     return;
   }
   
-  // For Firestore, we can do setDoc with custom id (workerId_date) to ensure uniqueness and overwrite status
+  // For Firestore, we can do setDoc with custom id (workerId_cropCycleId_date) to ensure uniqueness and overwrite status
   for (const r of records) {
-    const docId = `${r.workerId}_${date}`;
+    const docId = r.cropCycleId
+      ? `${r.workerId}_${r.cropCycleId}_${date}`
+      : `${r.workerId}_${date}`;
     const docRef = doc(db, 'attendance', docId);
     await setDoc(docRef, { ...r, ownerId: uid, ownerEmail: email });
   }
@@ -719,5 +723,167 @@ export const subscribeToAuthChanges = (callback: (user: AppUser | null) => void)
       callback(null);
     }
   });
+};
+
+export const migrateLegacyRecords = async (): Promise<void> => {
+  const uid = getCurrentUserId();
+  const email = getCurrentUserEmail();
+
+  // 1. Fetch crop cycles
+  const cycles = await fetchCropCycles();
+  const hasLegacyCycle = cycles.some(c => c.id === 'legacy');
+
+  // 2. Fetch all raw records
+  let rawExpenses: Expense[] = [];
+  let rawPayments: Payment[] = [];
+  let rawAttendance: AttendanceRecord[] = [];
+
+  if (isMockMode) {
+    rawExpenses = getMockData('paramesh_expenses').filter((e: any) => e.ownerId === uid);
+    rawPayments = getMockData('paramesh_payments').filter((p: any) => p.ownerId === uid);
+    rawAttendance = getMockData('paramesh_attendance').filter((a: any) => a.ownerId === uid);
+  } else {
+    try {
+      const qExpenses = query(collection(db, 'expenses'), where('ownerId', '==', uid));
+      const snapshotExpenses = await getDocs(qExpenses);
+      snapshotExpenses.forEach(doc => rawExpenses.push({ id: doc.id, ...doc.data() } as Expense));
+
+      const qPayments = query(collection(db, 'payments'), where('ownerId', '==', uid));
+      const snapshotPayments = await getDocs(qPayments);
+      snapshotPayments.forEach(doc => rawPayments.push({ id: doc.id, ...doc.data() } as Payment));
+
+      const qAttendance = query(collection(db, 'attendance'), where('ownerId', '==', uid));
+      const snapshotAttendance = await getDocs(qAttendance);
+      snapshotAttendance.forEach(doc => rawAttendance.push({ id: doc.id, ...doc.data() } as AttendanceRecord));
+    } catch (e) {
+      console.error("Migration fetch failed:", e);
+      return;
+    }
+  }
+
+  const legacyExpenses = rawExpenses.filter(e => !e.cropCycleId);
+  const legacyPayments = rawPayments.filter(p => !p.cropCycleId);
+  const legacyAttendance = rawAttendance.filter(a => !a.cropCycleId);
+
+  if (legacyExpenses.length === 0 && legacyPayments.length === 0 && legacyAttendance.length === 0) {
+    // Nothing to migrate
+    return;
+  }
+
+  // Find all unique worker IDs from legacy attendance and payments
+  const legacyWorkerIdsSet = new Set<string>();
+  legacyPayments.forEach(p => legacyWorkerIdsSet.add(p.workerId));
+  legacyAttendance.forEach(a => legacyWorkerIdsSet.add(a.workerId));
+  const legacyWorkerIds = Array.from(legacyWorkerIdsSet);
+
+  // 3. Create or update legacy crop cycle
+  if (!hasLegacyCycle) {
+    const legacyCycle: CropCycle = {
+      id: 'legacy',
+      cropName: 'Legacy Records',
+      variety: 'Various',
+      season: 'Legacy',
+      landName: 'Various',
+      area: 'Various',
+      startDate: '2020-01-01',
+      expectedHarvestDate: '2020-01-01',
+      status: 'completed',
+      notes: 'Auto-generated for legacy records.',
+      ownerId: uid,
+      ownerEmail: email,
+      workerIds: legacyWorkerIds,
+      createdAt: new Date().toISOString()
+    };
+
+    if (isMockMode) {
+      const allCycles = getMockData('paramesh_crop_cycles');
+      allCycles.push(legacyCycle);
+      setMockData('paramesh_crop_cycles', allCycles);
+    } else {
+      try {
+        await setDoc(doc(db, 'cropCycles', 'legacy'), legacyCycle);
+      } catch (e) {
+        console.error("Failed to create legacy crop cycle in Firestore:", e);
+      }
+    }
+  } else {
+    // Merge worker IDs if legacy cycle already exists
+    const existing = cycles.find(c => c.id === 'legacy')!;
+    const mergedWorkerIds = Array.from(new Set([...(existing.workerIds || []), ...legacyWorkerIds]));
+    if (mergedWorkerIds.length !== (existing.workerIds || []).length) {
+      if (isMockMode) {
+        const allCycles = getMockData('paramesh_crop_cycles');
+        const idx = allCycles.findIndex(c => c.id === 'legacy');
+        if (idx !== -1) {
+          allCycles[idx].workerIds = mergedWorkerIds;
+          setMockData('paramesh_crop_cycles', allCycles);
+        }
+      } else {
+        try {
+          await updateDoc(doc(db, 'cropCycles', 'legacy'), { workerIds: mergedWorkerIds });
+        } catch (e) {
+          console.error("Failed to update legacy crop cycle in Firestore:", e);
+        }
+      }
+    }
+  }
+
+  // 4. Update legacy expenses
+  if (isMockMode) {
+    const allExpenses = getMockData('paramesh_expenses');
+    allExpenses.forEach(e => {
+      if (e.ownerId === uid && !e.cropCycleId) {
+        e.cropCycleId = 'legacy';
+      }
+    });
+    setMockData('paramesh_expenses', allExpenses);
+  } else {
+    for (const exp of legacyExpenses) {
+      try {
+        await updateDoc(doc(db, 'expenses', exp.id), { cropCycleId: 'legacy' });
+      } catch (e) {
+        console.error(`Failed to migrate expense ${exp.id}:`, e);
+      }
+    }
+  }
+
+  // 5. Update legacy payments
+  if (isMockMode) {
+    const allPayments = getMockData('paramesh_payments');
+    allPayments.forEach(p => {
+      if (p.ownerId === uid && !p.cropCycleId) {
+        p.cropCycleId = 'legacy';
+      }
+    });
+    setMockData('paramesh_payments', allPayments);
+  } else {
+    for (const pay of legacyPayments) {
+      try {
+        await updateDoc(doc(db, 'payments', pay.id), { cropCycleId: 'legacy' });
+      } catch (e) {
+        console.error(`Failed to migrate payment ${pay.id}:`, e);
+      }
+    }
+  }
+
+  // 6. Update legacy attendance
+  if (isMockMode) {
+    const allAtt = getMockData('paramesh_attendance');
+    allAtt.forEach(a => {
+      if (a.ownerId === uid && !a.cropCycleId) {
+        a.cropCycleId = 'legacy';
+      }
+    });
+    setMockData('paramesh_attendance', allAtt);
+  } else {
+    for (const att of legacyAttendance) {
+      try {
+        const recordId = att.id || `${att.workerId}_${att.date}`;
+        await updateDoc(doc(db, 'attendance', recordId), { cropCycleId: 'legacy' });
+      } catch (e) {
+        console.error(`Failed to migrate attendance record:`, e);
+      }
+    }
+  }
 };
 

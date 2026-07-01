@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   BarChart, 
   Bar, 
@@ -16,13 +16,8 @@ import {
   FileDown, 
   BarChart3, 
   TrendingUp, 
-  Users, 
-  DollarSign,
-  AlertCircle,
   FileSpreadsheet,
-  Award,
-  Calendar,
-  ChevronRight
+  Award
 } from 'lucide-react';
 import { 
   Worker, 
@@ -65,6 +60,12 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   selectedCropCycleId,
   cropCycles
 }) => {
+  const [rawWorkers, setRawWorkers] = useState<Worker[]>([]);
+  const [rawExpenses, setRawExpenses] = useState<Expense[]>([]);
+  const [rawPayments, setRawPayments] = useState<Payment[]>([]);
+  const [rawAttendance, setRawAttendance] = useState<AttendanceRecord[]>([]);
+  const [cropFilterScope, setCropFilterScope] = useState<'current' | 'all'>('current');
+
   const [workers, setWorkers] = useState<Worker[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -78,11 +79,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
   const [endDate, setEndDate] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  useEffect(() => {
-    loadData();
-  }, [selectedCropCycleId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const wData = await fetchWorkers();
@@ -90,26 +87,48 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       const pData = await fetchPayments();
       const aData = await fetchAttendance();
 
-      const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
-      const assignedIds = cropObj ? cropObj.workerIds || [] : [];
-      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
-        ? wData 
-        : wData.filter(w => assignedIds.includes(w.id));
-
-      const filteredExpenses = filterByCrop(eData, selectedCropCycleId);
-      const filteredPayments = filterByCrop(pData, selectedCropCycleId);
-      const filteredAttendance = filterByCrop(aData, selectedCropCycleId);
-
-      setWorkers(filteredWorkers);
-      setExpenses(filteredExpenses);
-      setPayments(filteredPayments);
-      setAttendance(filteredAttendance);
+      setRawWorkers(wData);
+      setRawExpenses(eData);
+      setRawPayments(pData);
+      setRawAttendance(aData);
     } catch (e) {
       showToast("Error compiling ledger reports", "error");
     } finally {
       setLoading(false);
     }
-  };
+  }, [showToast]);
+
+  const applyFilters = useCallback(() => {
+    if (cropFilterScope === 'all') {
+      setWorkers(rawWorkers);
+      setExpenses(rawExpenses);
+      setPayments(rawPayments);
+      setAttendance(rawAttendance);
+    } else {
+      const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+      const assignedIds = cropObj ? cropObj.workerIds || [] : [];
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+        ? rawWorkers 
+        : rawWorkers.filter(w => assignedIds.includes(w.id));
+
+      const filteredExpenses = filterByCrop(rawExpenses, selectedCropCycleId);
+      const filteredPayments = filterByCrop(rawPayments, selectedCropCycleId);
+      const filteredAttendance = filterByCrop(rawAttendance, selectedCropCycleId);
+
+      setWorkers(filteredWorkers);
+      setExpenses(filteredExpenses);
+      setPayments(filteredPayments);
+      setAttendance(filteredAttendance);
+    }
+  }, [selectedCropCycleId, cropFilterScope, rawWorkers, rawExpenses, rawPayments, rawAttendance, cropCycles]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  useEffect(() => {
+    applyFilters();
+  }, [applyFilters]);
 
   const q = searchQuery.toLowerCase().trim();
 
@@ -537,6 +556,37 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           <>
             {/* Filters Controls Box */}
             <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/40 shadow-soft space-y-4 mb-5 shrink-0">
+              {/* Crop Scope Selector */}
+              <div className="flex flex-col gap-1.5 pb-1">
+                <label className="text-[10px] font-bold text-gray-400 uppercase tracking-wider pl-1">Report Scope</label>
+                <div className="flex bg-[#F8F5E9]/70 p-0.5 rounded-xl border border-[#E0DBC5]/40 text-center text-xs font-semibold gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setCropFilterScope('current')}
+                    className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${
+                      cropFilterScope === 'current' ? 'bg-primary text-white shadow-sm' : 'text-gray-500 hover:text-text-dark'
+                    }`}
+                  >
+                    Current Crop ({
+                      selectedCropCycleId === 'all' 
+                        ? t('allCrops', lang) 
+                        : selectedCropCycleId === 'legacy'
+                          ? t('legacyRecords', lang)
+                          : cropCycles.find(c => c.id === selectedCropCycleId)?.cropName || 'Selected Crop'
+                    })
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCropFilterScope('all')}
+                    className={`flex-1 py-2 rounded-lg transition-all cursor-pointer ${
+                      cropFilterScope === 'all' ? 'bg-primary text-white shadow-sm' : 'text-gray-500 hover:text-text-dark'
+                    }`}
+                  >
+                    All Crops (Aggregate)
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 {/* Report Type */}
                 <div className="flex flex-col gap-1">

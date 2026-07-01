@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, Plus, Edit2, Trash2, Phone, X, User, MapPin, DollarSign, FileText, Check, History } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, Phone, X, MapPin, DollarSign, FileText, Check, History } from 'lucide-react';
 import { 
   Worker, 
   Payment,
@@ -67,11 +67,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
   const [payNote, setPayNote] = useState('');
   const [savingPayment, setSavingPayment] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [selectedCropCycleId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const workersData = await fetchWorkers();
@@ -98,7 +94,11 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCropCycleId, cropCycles, showToast]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const openAddModal = () => {
     setEditingWorker(null);
@@ -203,7 +203,8 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
         workerId: activeWorkerForPay.worker.id,
         amount: amtNum,
         date: payDate,
-        note: payNote.trim() || 'Wage Payment'
+        note: payNote.trim() || 'Wage Payment',
+        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
       });
 
       showToast(t('paymentSuccess', lang), "success");
@@ -922,8 +923,9 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                                 <div key={idx} className="bg-[#F8F5E9]/30 border border-[#E0DBC5]/30 p-3 rounded-2xl flex flex-col gap-1.5 shadow-xs">
                                   <div className="flex justify-between items-start">
                                     <div>
-                                      <h4 className="text-[11px] font-bold text-text-dark leading-tight">{row.name}</h4>
-                                      {row.season && row.season !== 'N/A' && <span className="text-[8px] text-gray-400 font-extrabold block mt-0.5">{row.season}</span>}
+                                      <h4 className="text-[11px] font-bold text-text-dark leading-tight">
+                                        {row.season && row.season !== 'N/A' ? `${row.name} (${row.season})` : row.name}
+                                      </h4>
                                     </div>
                                     <span className="text-[10px] font-extrabold text-primary">₹{row.earned} earned</span>
                                   </div>

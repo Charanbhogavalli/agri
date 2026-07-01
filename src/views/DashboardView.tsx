@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Users, 
@@ -100,11 +100,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [weeklyReportSent, setWeeklyReportSent] = useState<boolean | null>(null);
   const [sendingReport, setSendingReport] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, [selectedCropCycleId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const workersData = await fetchWorkers();
@@ -145,15 +141,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       setInsightsLoading(false);
       setLoading(false);
     }
-  };
+  }, [selectedCropCycleId, showToast]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   // Trigger Weekly Email Report manually
   const handleSendWeeklyReport = async () => {
     setSendingReport(true);
     try {
       const allAttData = await fetchAttendance();
+      const filteredAtt = filterByCrop(allAttData, selectedCropCycleId);
       const prevSundayStr = getPreviousSundayDate();
-      const calculatedReport = calculateWeeklyReport(workers, allAttData, payments, expenses, prevSundayStr);
+      const calculatedReport = calculateWeeklyReport(workers, filteredAtt, payments, expenses, prevSundayStr);
       
       const result = await sendWeeklyReport(calculatedReport);
       if (result.success) {
@@ -201,7 +202,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           amount: parsedResult.amount,
           date: parsedResult.date,
           note: parsedResult.description,
-          cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
+          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
         });
         showToast(t('paymentSuccess', lang), "success");
       } else if (parsedResult.type === 'expense') {
@@ -211,7 +212,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           description: parsedResult.description,
           notes: '',
           date: parsedResult.date,
-          cropCycleId: selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' ? selectedCropCycleId : undefined
+          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
         });
         showToast(t('expenseSuccess', lang), "success");
       } else {
