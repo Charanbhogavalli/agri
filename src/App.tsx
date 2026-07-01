@@ -35,6 +35,7 @@ import {
   editCropCycle,
   removeCropCycle,
   canDeleteCropCycle,
+  rebuildCropCycleWithData,
   assignWorkerToCrop,
   unassignWorkerFromCrop,
   fetchWorkerCrops,
@@ -104,6 +105,8 @@ export default function App() {
   const [copyAttendanceFlag, setCopyAttendanceFlag] = useState(false);
   const [copyPaymentsFlag, setCopyPaymentsFlag] = useState(false);
   const [copyExpensesFlag, setCopyExpensesFlag] = useState(false);
+  const [copyWorkerNotesFlag, setCopyWorkerNotesFlag] = useState(true);
+  const [cropCreationStep, setCropCreationStep] = useState<'creating' | 'workers' | 'attendance' | 'payments' | 'expenses' | 'dashboard' | 'reports' | 'finalizing' | 'success' | null>(null);
   const [savingCrop, setSavingCrop] = useState(false);
   
   // Toast notifications state
@@ -286,102 +289,28 @@ export default function App() {
     }
 
     setSavingCrop(true);
+    setCropCreationStep('creating');
     try {
-      let workerIds: string[] = [];
-      if (copyWorkersFlag) {
-        const workers = await fetchWorkers();
-        workerIds = workers.map(w => w.id);
-      }
-
-      const newCycle: Omit<CropCycle, 'id' | 'createdAt'> = {
+      const newId = await rebuildCropCycleWithData({
         cropName: newCropName.trim(),
-        season: newCropSeason.trim(),
         variety: newCropVariety.trim(),
+        season: newCropSeason.trim(),
         landName: newCropLandName.trim(),
         area: newCropArea.trim(),
         irrigationType: newCropIrrigationType,
         startDate: newCropStartDate,
         expectedHarvestDate: newCropExpectedHarvestDate,
-        status: 'active',
         notes: newCropNotes.trim(),
-        workerIds
-      };
-
-      const newId = await createCropCycle(newCycle);
-
-      // Create WorkerCrop relationships
-      if (copyWorkersFlag) {
-        for (const wId of workerIds) {
-          await assignWorkerToCrop(wId, newId);
+        sourceCropId: selectedCropCycleId !== 'all' ? selectedCropCycleId : undefined,
+        copyWorkers: copyWorkersFlag,
+        copyAttendance: copyAttendanceFlag,
+        copyPayments: copyPaymentsFlag,
+        copyExpenses: copyExpensesFlag,
+        copyWorkerNotes: copyWorkerNotesFlag,
+        onProgress: (step: 'creating' | 'workers' | 'attendance' | 'payments' | 'expenses' | 'dashboard' | 'reports' | 'finalizing' | 'success') => {
+          if (step !== 'success') setCropCreationStep(step);
         }
-      }
-
-      // Copy Attendance if selected
-      if (copyAttendanceFlag) {
-        try {
-          const allAtt = await fetchAttendance();
-          const cropAtt = filterByCrop(allAtt, selectedCropCycleId);
-          const attByDate: Record<string, Omit<AttendanceRecord, 'id'>[]> = {};
-          cropAtt.forEach(a => {
-            if (!attByDate[a.date]) {
-              attByDate[a.date] = [];
-            }
-            attByDate[a.date].push({
-              workerId: a.workerId,
-              date: a.date,
-              status: a.status,
-              wageForDay: a.wageForDay,
-              workType: a.workType,
-              notes: a.notes,
-              cropCycleId: newId
-            });
-          });
-          for (const [date, records] of Object.entries(attByDate)) {
-            await saveAttendanceList(date, records);
-          }
-        } catch (e) {
-          console.error("Failed to copy attendance:", e);
-        }
-      }
-
-      // Copy Payments if selected
-      if (copyPaymentsFlag) {
-        try {
-          const allPayments = await fetchPayments();
-          const cropPayments = filterByCrop(allPayments, selectedCropCycleId);
-          for (const p of cropPayments) {
-            await createPayment({
-              workerId: p.workerId,
-              amount: p.amount,
-              date: p.date,
-              note: p.note,
-              cropCycleId: newId
-            });
-          }
-        } catch (e) {
-          console.error("Failed to copy payments:", e);
-        }
-      }
-
-      // Copy Expenses if selected
-      if (copyExpensesFlag) {
-        try {
-          const allExpenses = await fetchExpenses();
-          const cropExpenses = filterByCrop(allExpenses, selectedCropCycleId);
-          for (const e of cropExpenses) {
-            await createExpense({
-              category: e.category,
-              amount: e.amount,
-              description: e.description,
-              notes: e.notes,
-              date: e.date,
-              cropCycleId: newId
-            });
-          }
-        } catch (e) {
-          console.error("Failed to copy expenses:", e);
-        }
-      }
+      });
 
       showToast("Crop cycle created successfully!", "success");
       
@@ -394,9 +323,10 @@ export default function App() {
       setShowNewCropModal(false);
     } catch (err: any) {
       console.error(err);
-      showToast("Failed to create crop cycle", "error");
+      showToast(err?.message || "Failed to create crop cycle", "error");
     } finally {
       setSavingCrop(false);
+      setCropCreationStep(null);
     }
   };
 
@@ -945,11 +875,55 @@ export default function App() {
               className="bg-white w-full max-w-md rounded-3xl p-6 shadow-premium relative border border-[#E0DBC5] max-h-[90vh] overflow-y-auto no-scrollbar"
             >
               <button 
-                onClick={() => setShowNewCropModal(false)}
-                className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
+                onClick={() => !savingCrop && setShowNewCropModal(false)}
+                disabled={savingCrop}
+                className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <X size={18} />
               </button>
+
+              {savingCrop && cropCreationStep && (
+                <div className="absolute inset-0 bg-white/95 rounded-3xl p-6 z-50 flex flex-col justify-center items-center">
+                  <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mb-6"></div>
+                  <h4 className="font-bold text-sm text-text-dark mb-4">
+                    {bilingual ? 'Creating Crop Cycle... / పంట చక్రం సృష్టిస్తోంది...' : 'Creating Crop Cycle...'}
+                  </h4>
+                  <div className="w-full max-w-xs space-y-2">
+                    {[
+                      { key: 'creating', label: bilingual ? 'Creating Crop / పంటను సృష్టిస్తోంది' : 'Creating Crop' },
+                      { key: 'workers', label: bilingual ? 'Linking Workers / వర్కర్లను లింక్ చేస్తోంది' : 'Linking Workers' },
+                      { key: 'attendance', label: bilingual ? 'Copying Attendance / హాజరును కాపీ చేస్తోంది' : 'Copying Attendance' },
+                      { key: 'payments', label: bilingual ? 'Copying Payments / చెల్లింపులను కాపీ చేస్తోంది' : 'Copying Payments' },
+                      { key: 'expenses', label: bilingual ? 'Copying Expenses / ఖర్చులను కాపీ చేస్తోంది' : 'Copying Expenses' },
+                      { key: 'dashboard', label: bilingual ? 'Updating Dashboard / డ్యాష్‌బోర్డ్‌ను నవీకరిస్తోంది' : 'Updating Dashboard' },
+                      { key: 'reports', label: bilingual ? 'Updating Reports / నిвеదికలను నవీకరిస్తోంది' : 'Updating Reports' },
+                      { key: 'finalizing', label: bilingual ? 'Finalizing / ముగింపు పనులు' : 'Finalizing' }
+                    ].map((step) => {
+                      const stepOrder = ['creating', 'workers', 'attendance', 'payments', 'expenses', 'dashboard', 'reports', 'finalizing', 'success'];
+                      const currentIndex = stepOrder.indexOf(cropCreationStep);
+                      const stepIndex = stepOrder.indexOf(step.key);
+                      const status = currentIndex > stepIndex ? 'completed' : currentIndex === stepIndex ? 'current' : 'pending';
+
+                      return (
+                        <div key={step.key} className="flex items-center gap-2 text-xs font-semibold">
+                          {status === 'completed' && (
+                            <span className="w-4 h-4 rounded-full bg-green-100 text-green-600 flex items-center justify-center font-bold text-[10px]">✓</span>
+                          )}
+                          {status === 'current' && (
+                            <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                          )}
+                          {status === 'pending' && (
+                            <span className="w-4 h-4 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center text-[10px] font-bold">•</span>
+                          )}
+                          <span className={`${status === 'current' ? 'text-primary font-bold' : status === 'completed' ? 'text-text-dark' : 'text-gray-400'}`}>
+                            {step.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <h3 className="text-lg font-bold text-text-dark mb-1 flex items-center gap-2">
                 <Sprout className="text-primary" size={20} />
@@ -1073,8 +1047,9 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={copyWorkersFlag}
+                      disabled={savingCrop}
                       onChange={(e) => setCopyWorkersFlag(e.target.checked)}
-                      className="rounded text-primary focus:ring-primary w-4 h-4"
+                      className="rounded text-primary focus:ring-primary w-4 h-4 disabled:opacity-50"
                     />
                     <span>{t('importWorkers', lang)}</span>
                   </label>
@@ -1083,8 +1058,9 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={copyAttendanceFlag}
+                      disabled={savingCrop}
                       onChange={(e) => setCopyAttendanceFlag(e.target.checked)}
-                      className="rounded text-primary focus:ring-primary w-4 h-4"
+                      className="rounded text-primary focus:ring-primary w-4 h-4 disabled:opacity-50"
                     />
                     <span>{t('copyAttendance', lang)}</span>
                   </label>
@@ -1093,8 +1069,9 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={copyPaymentsFlag}
+                      disabled={savingCrop}
                       onChange={(e) => setCopyPaymentsFlag(e.target.checked)}
-                      className="rounded text-primary focus:ring-primary w-4 h-4"
+                      className="rounded text-primary focus:ring-primary w-4 h-4 disabled:opacity-50"
                     />
                     <span>{t('copyPayments', lang)}</span>
                   </label>
@@ -1103,10 +1080,22 @@ export default function App() {
                     <input
                       type="checkbox"
                       checked={copyExpensesFlag}
+                      disabled={savingCrop}
                       onChange={(e) => setCopyExpensesFlag(e.target.checked)}
-                      className="rounded text-primary focus:ring-primary w-4 h-4"
+                      className="rounded text-primary focus:ring-primary w-4 h-4 disabled:opacity-50"
                     />
                     <span>{t('copyExpenses', lang)}</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-text-dark select-none">
+                    <input
+                      type="checkbox"
+                      checked={copyWorkerNotesFlag}
+                      disabled={savingCrop}
+                      onChange={(e) => setCopyWorkerNotesFlag(e.target.checked)}
+                      className="rounded text-primary focus:ring-primary w-4 h-4 disabled:opacity-50"
+                    />
+                    <span>{bilingual ? 'Copy Worker Notes / వర్కర్ నోట్స్ కాపీ చేయి' : 'Copy Worker Notes'}</span>
                   </label>
                 </div>
 
@@ -1114,8 +1103,9 @@ export default function App() {
                 <div className="flex gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowNewCropModal(false)}
-                    className="flex-1 py-3.5 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 text-xs transition-all"
+                    onClick={() => !savingCrop && setShowNewCropModal(false)}
+                    disabled={savingCrop}
+                    className="flex-1 py-3.5 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 text-xs transition-all disabled:opacity-50"
                   >
                     Cancel
                   </button>
