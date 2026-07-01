@@ -107,7 +107,7 @@ export const ExpensesView: React.FC<ExpensesViewProps> = ({
         description: description.trim(),
         notes: notes.trim(),
         date,
-        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
+        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy_crop_2025_2026'
       });
 
       showToast("Expense recorded successfully!", "success");

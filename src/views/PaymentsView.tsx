@@ -13,7 +13,8 @@ import {
   ArrowUpRight, 
   Search, 
   Trash2, 
-  Edit2 
+  Edit2,
+  Printer
 } from 'lucide-react';
 import { 
   Worker, 
@@ -26,7 +27,10 @@ import {
   removePayment,
   fetchAttendance,
   CropCycle,
-  filterByCrop
+  filterByCrop,
+  calculateWorkerEarnings,
+  calculateWorkerPayments,
+  calculateWorkerPending
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import { getLocalDateString } from '../utils/date';
@@ -96,7 +100,7 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
       // Determine active workers for this crop
       const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
       const assignedIds = cropObj ? cropObj.workerIds || [] : [];
-      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026' 
         ? workersData 
         : workersData.filter(w => assignedIds.includes(w.id));
 
@@ -113,23 +117,16 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
 
       // Calculate summaries for each worker
       const compiled: WorkerPaymentSummary[] = filteredWorkers.map(w => {
-        // Attendance calculations incorporating variable wages and half days
-        const workerAtt = allAttendance.filter(a => a.workerId === w.id);
-        const totalEarned = workerAtt.reduce((sum, a) => {
-          const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
-          if (a.status === 'present') return sum + wage;
-          if (a.status === 'half_day') return sum + wage * 0.5;
-          return sum;
-        }, 0);
+        const totalEarned = calculateWorkerEarnings(w, allAttendance);
 
         // Payments for this worker
         const workerHistory = filteredPayments
           .filter(p => p.workerId === w.id)
           .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
         
-        const totalPaid = workerHistory.reduce((sum, p) => sum + p.amount, 0);
+        const totalPaid = calculateWorkerPayments(w, filteredPayments);
         
-        const balance = totalEarned - totalPaid;
+        const balance = calculateWorkerPending(w, allAttendance, filteredPayments);
         const pendingAmount = balance > 0 ? balance : 0;
         const advanceAmount = balance < 0 ? Math.abs(balance) : 0;
 
@@ -186,14 +183,14 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
         amount: amtNum,
         date,
         note: note.trim() || 'Wage Payment',
-        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
+        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy_crop_2025_2026'
       });
 
       showToast("Payment recorded successfully!", "success");
       setShowAddModal(false);
       loadPaymentsData();
-    } catch (error) {
-      showToast("Failed to record payment", "error");
+    } catch (error: any) {
+      showToast(error.message || "Failed to record payment", "error");
     } finally {
       setSaving(false);
     }
@@ -272,6 +269,146 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
     } catch (error) {
       showToast("Failed to delete payment", "error");
     }
+  };
+
+  const handlePrintReceipt = (payment: Payment, workerName: string) => {
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      showToast("Please allow popups to print receipts", "error");
+      return;
+    }
+    
+    const cropName = cropCycles.find(c => c.id === payment.cropCycleId)?.cropName || 'Legacy Crop';
+
+    const htmlContent = `
+      <html>
+        <head>
+          <title>Receipt - ${workerName}</title>
+          <style>
+            body {
+              font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+              padding: 40px;
+              color: #333;
+              background-color: #fff;
+            }
+            .receipt-container {
+              max-width: 500px;
+              margin: 0 auto;
+              border: 2px solid #E0DBC5;
+              border-radius: 20px;
+              padding: 30px;
+              background-color: #FCFAF2;
+              box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+            }
+            .header {
+              text-align: center;
+              border-bottom: 2px solid #E0DBC5;
+              padding-bottom: 20px;
+              margin-bottom: 20px;
+            }
+            .header h1 {
+              color: #556B2F;
+              margin: 0 0 5px 0;
+              font-size: 24px;
+            }
+            .header p {
+              margin: 0;
+              font-size: 12px;
+              color: #888;
+            }
+            .receipt-id {
+              font-family: monospace;
+              background-color: #E0DBC5;
+              padding: 3px 8px;
+              border-radius: 5px;
+              font-size: 11px;
+            }
+            .row {
+              display: flex;
+              justify-content: space-between;
+              padding: 10px 0;
+              border-bottom: 1px dashed #E0DBC5;
+              font-size: 14px;
+            }
+            .row:last-of-type {
+              border-bottom: none;
+            }
+            .label {
+              font-weight: bold;
+              color: #666;
+            }
+            .value {
+              color: #111;
+              font-weight: 600;
+            }
+            .amount-box {
+              background-color: #556B2F;
+              color: white;
+              text-align: center;
+              padding: 15px;
+              border-radius: 12px;
+              font-size: 20px;
+              font-weight: bold;
+              margin: 20px 0;
+            }
+            .footer {
+              text-align: center;
+              margin-top: 30px;
+              font-size: 10px;
+              color: #777;
+              border-top: 1px solid #E0DBC5;
+              padding-top: 15px;
+            }
+            @media print {
+              body { padding: 0; }
+              .receipt-container { border: none; box-shadow: none; max-width: 100%; }
+            }
+          </style>
+        </head>
+        <body onload="window.print(); window.close();">
+          <div class="receipt-container">
+            <div class="header">
+              <h1>PARAMESH AGRIBOOK</h1>
+              <p>Smart Farm Account Ledger</p>
+              <div style="margin-top: 10px;">
+                <span class="receipt-id">RECEIPT NO: AGR-${payment.id.substring(0, 8).toUpperCase()}</span>
+              </div>
+            </div>
+            
+            <div class="row">
+              <span class="label">Date / తేదీ:</span>
+              <span class="value">${payment.date}</span>
+            </div>
+            
+            <div class="row">
+              <span class="label">Crop Cycle / పంట కాలం:</span>
+              <span class="value">${cropName}</span>
+            </div>
+
+            <div class="row">
+              <span class="label">Paid To / పనివారి పేరు:</span>
+              <span class="value">${workerName}</span>
+            </div>
+
+            <div class="row">
+              <span class="label">Description / వివరణ:</span>
+              <span class="value">${payment.note || 'Wage Payout'}</span>
+            </div>
+
+            <div class="amount-box">
+              Amount Paid / చెల్లించిన సొమ్ము: ₹${payment.amount}
+            </div>
+
+            <div class="footer">
+              <p>Generated electronically via AgriBook Application</p>
+              <p style="font-weight: bold; color: #556B2F; margin-top: 5px;">✓ PAID</p>
+            </div>
+          </div>
+        </body>
+      </html>
+    `;
+    printWindow.document.write(htmlContent);
+    printWindow.document.close();
   };
 
   const toggleHistory = (workerId: string) => {
@@ -491,6 +628,13 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                                 <span className="font-semibold text-gray-400 text-[10px]">{p.date}</span>
                                 <div className="flex gap-1">
                                   <button
+                                    onClick={() => handlePrintReceipt(p, s.worker.name)}
+                                    className="p-1.5 bg-success-green/10 text-success-green rounded-lg active:scale-90"
+                                    title="Print receipt"
+                                  >
+                                    <Printer size={12} />
+                                  </button>
+                                  <button
                                     onClick={() => openEditPaymentModal(p, s.worker.name)}
                                     className="p-1.5 bg-primary/10 text-primary rounded-lg active:scale-90"
                                     title="Edit payment"
@@ -547,6 +691,13 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
                         </div>
                         
                         <div className="flex gap-1 shrink-0 ml-1">
+                          <button
+                            onClick={() => handlePrintReceipt(p, wName)}
+                            className="p-1.5 bg-success-green/10 text-success-green rounded-lg active:scale-90"
+                            title="Print receipt"
+                          >
+                            <Printer size={11} />
+                          </button>
                           <button
                             onClick={() => openEditPaymentModal(p, wName)}
                             className="p-1.5 bg-primary/10 text-primary rounded-lg active:scale-90"

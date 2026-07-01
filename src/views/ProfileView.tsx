@@ -82,6 +82,14 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [geminiKey, setGeminiKey] = React.useState('');
   const [resendKey, setResendKey] = React.useState('');
 
+  // Firebase Config configurations
+  const [firebaseApiKey, setFirebaseApiKey] = React.useState('');
+  const [firebaseProjectId, setFirebaseProjectId] = React.useState('');
+  const [firebaseAuthDomain, setFirebaseAuthDomain] = React.useState('');
+  const [firebaseStorageBucket, setFirebaseStorageBucket] = React.useState('');
+  const [firebaseMessagingSenderId, setFirebaseMessagingSenderId] = React.useState('');
+  const [firebaseAppId, setFirebaseAppId] = React.useState('');
+
   // Weekly email logs
   interface EmailLog {
     date: string;
@@ -117,6 +125,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     setSenderEmail(sender);
     setGeminiKey(gKey);
     setResendKey(rKey);
+
+    // Load Firebase Config from localStorage
+    const configStr = localStorage.getItem('paramesh_firebase_config');
+    if (configStr) {
+      try {
+        const parsed = JSON.parse(configStr);
+        setFirebaseApiKey(parsed.apiKey || '');
+        setFirebaseProjectId(parsed.projectId || '');
+        setFirebaseAuthDomain(parsed.authDomain || '');
+        setFirebaseStorageBucket(parsed.storageBucket || '');
+        setFirebaseMessagingSenderId(parsed.messagingSenderId || '');
+        setFirebaseAppId(parsed.appId || '');
+      } catch (e) {}
+    }
 
     const logs = JSON.parse(localStorage.getItem('paramesh_weekly_emails') || '[]');
     setEmailLogs(logs);
@@ -198,6 +220,40 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
     }
   };
 
+  const handleSaveFirebaseConfig = () => {
+    if (!firebaseApiKey.trim() || !firebaseProjectId.trim()) {
+      showToast("API Key and Project ID are required", "error");
+      return;
+    }
+    const config = {
+      apiKey: firebaseApiKey.trim(),
+      projectId: firebaseProjectId.trim(),
+      authDomain: firebaseAuthDomain.trim(),
+      storageBucket: firebaseStorageBucket.trim(),
+      messagingSenderId: firebaseMessagingSenderId.trim(),
+      appId: firebaseAppId.trim()
+    };
+    localStorage.setItem('paramesh_firebase_config', JSON.stringify(config));
+    showToast("Firebase Config saved! Reloading to connect...", "success");
+    setTimeout(() => {
+      window.location.reload();
+    }, 1500);
+  };
+
+  const handleClearFirebaseConfig = () => {
+    localStorage.removeItem('paramesh_firebase_config');
+    setFirebaseApiKey('');
+    setFirebaseProjectId('');
+    setFirebaseAuthDomain('');
+    setFirebaseStorageBucket('');
+    setFirebaseMessagingSenderId('');
+    setFirebaseAppId('');
+    showToast("Reset to Mock Mode. Reloading page...", "success");
+    setTimeout(() => {
+      window.location.reload();
+    }, 1500);
+  };
+
   return (
     <div className="flex-1 p-4 pb-24 overflow-y-auto no-scrollbar space-y-5">
       {/* Title */}
@@ -258,6 +314,106 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               </div>
             </>
           )}
+        </div>
+      </div>
+
+      {/* Firebase Cloud Configuration */}
+      <div className="bg-white p-5 rounded-3xl border border-[#E0DBC5]/45 shadow-soft space-y-4">
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider pl-1 flex items-center gap-1.5">
+          <Database size={14} className="text-primary" />
+          {bilingual ? 'Firebase Setup / ఫైర్‌బేస్ కనెక్ట్' : 'Firebase Cloud Setup'}
+        </h3>
+
+        <div className="space-y-3">
+          <p className="text-[10px] text-gray-400 font-semibold leading-normal pl-1">
+            Enter your Firebase project credentials to sync your data live to the cloud. Leave blank to use offline Mock Mode.
+          </p>
+          
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1 col-span-2">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">API Key</label>
+              <input
+                type="password"
+                value={firebaseApiKey}
+                onChange={(e) => setFirebaseApiKey(e.target.value)}
+                placeholder="AIzaSy..."
+                className="form-input text-xs"
+              />
+            </div>
+            
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">Project ID</label>
+              <input
+                type="text"
+                value={firebaseProjectId}
+                onChange={(e) => setFirebaseProjectId(e.target.value)}
+                placeholder="my-project-123"
+                className="form-input text-xs"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">Auth Domain</label>
+              <input
+                type="text"
+                value={firebaseAuthDomain}
+                onChange={(e) => setFirebaseAuthDomain(e.target.value)}
+                placeholder="my-project-123.firebaseapp.com"
+                className="form-input text-xs"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">Storage Bucket</label>
+              <input
+                type="text"
+                value={firebaseStorageBucket}
+                onChange={(e) => setFirebaseStorageBucket(e.target.value)}
+                placeholder="my-project-123.appspot.com"
+                className="form-input text-xs"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">Messaging Sender ID</label>
+              <input
+                type="text"
+                value={firebaseMessagingSenderId}
+                onChange={(e) => setFirebaseMessagingSenderId(e.target.value)}
+                placeholder="8562145789"
+                className="form-input text-xs"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1 col-span-2">
+              <label className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider pl-1">App ID</label>
+              <input
+                type="text"
+                value={firebaseAppId}
+                onChange={(e) => setFirebaseAppId(e.target.value)}
+                placeholder="1:8562145789:web:a1b2c3d4e5"
+                className="form-input text-xs"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-2">
+            <button
+              type="button"
+              onClick={handleClearFirebaseConfig}
+              className="flex-1 py-3 bg-gray-100 text-gray-600 font-bold rounded-2xl active:scale-95 text-xs transition-all cursor-pointer"
+            >
+              Reset to Mock Mode
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveFirebaseConfig}
+              className="flex-1 py-3 bg-primary text-white font-bold rounded-2xl active:scale-95 text-xs shadow-soft transition-all cursor-pointer flex items-center justify-center gap-1"
+            >
+              <Save size={14} />
+              Connect Cloud
+            </button>
+          </div>
         </div>
       </div>
 

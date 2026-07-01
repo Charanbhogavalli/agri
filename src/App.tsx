@@ -15,6 +15,7 @@ import {
   ChevronDown,
   Plus,
   Check,
+  Search,
   X
 } from 'lucide-react';
 import { 
@@ -22,6 +23,8 @@ import {
   signInWithEmail,
   subscribeToAuthChanges,
   AppUser, 
+  Worker,
+  WorkerCrop,
   fetchWorkers,
   fetchPayments,
   fetchAttendance,
@@ -29,6 +32,12 @@ import {
   CropCycle,
   fetchCropCycles,
   createCropCycle,
+  editCropCycle,
+  removeCropCycle,
+  canDeleteCropCycle,
+  assignWorkerToCrop,
+  unassignWorkerFromCrop,
+  fetchWorkerCrops,
   filterByCrop,
   migrateLegacyRecords,
   saveAttendanceList,
@@ -63,6 +72,11 @@ export default function App() {
   );
   const [cropCycles, setCropCycles] = useState<CropCycle[]>([]);
   const [showNewCropModal, setShowNewCropModal] = useState(false);
+  const [showManageCropsModal, setShowManageCropsModal] = useState(false);
+  const [editingCropCycle, setEditingCropCycle] = useState<CropCycle | null>(null);
+  const [showWorkerAssignmentsCrop, setShowWorkerAssignmentsCrop] = useState<CropCycle | null>(null);
+  const [allWorkers, setAllWorkers] = useState<any[]>([]);
+  const [workerCrops, setWorkerCrops] = useState<any[]>([]);
   const [isCropDropdownOpen, setIsCropDropdownOpen] = useState(false);
 
   // New Crop Form States
@@ -71,9 +85,15 @@ export default function App() {
   const [newCropVariety, setNewCropVariety] = useState('');
   const [newCropLandName, setNewCropLandName] = useState('');
   const [newCropArea, setNewCropArea] = useState('');
+  const [newCropIrrigationType, setNewCropIrrigationType] = useState<'Drip' | 'Sprinkler' | 'Flow' | 'Rainfed' | 'Other'>('Other');
   const [newCropStartDate, setNewCropStartDate] = useState('');
   const [newCropExpectedHarvestDate, setNewCropExpectedHarvestDate] = useState('');
+  const [newCropActualHarvestDate, setNewCropActualHarvestDate] = useState('');
   const [newCropNotes, setNewCropNotes] = useState('');
+  const [newCropStatus, setNewCropStatus] = useState<'active' | 'completed' | 'archived'>('active');
+  const [newCropHarvestRevenue, setNewCropHarvestRevenue] = useState('');
+  const [newCropHarvestYield, setNewCropHarvestYield] = useState('');
+  
   const [copyWorkersFlag, setCopyWorkersFlag] = useState(true);
   const [copyAttendanceFlag, setCopyAttendanceFlag] = useState(false);
   const [copyPaymentsFlag, setCopyPaymentsFlag] = useState(false);
@@ -112,6 +132,12 @@ export default function App() {
       await migrateLegacyRecords();
       const list = await fetchCropCycles();
       setCropCycles(list);
+
+      const workersList = await fetchWorkers();
+      setAllWorkers(workersList);
+
+      const wcList = await fetchWorkerCrops();
+      setWorkerCrops(wcList);
       
       const savedSelectedId = localStorage.getItem('paramesh_selected_crop_cycle_id');
       
@@ -261,6 +287,7 @@ export default function App() {
         variety: newCropVariety.trim(),
         landName: newCropLandName.trim(),
         area: newCropArea.trim(),
+        irrigationType: newCropIrrigationType,
         startDate: newCropStartDate,
         expectedHarvestDate: newCropExpectedHarvestDate,
         status: 'active',
@@ -269,6 +296,13 @@ export default function App() {
       };
 
       const newId = await createCropCycle(newCycle);
+
+      // Create WorkerCrop relationships
+      if (copyWorkersFlag) {
+        for (const wId of workerIds) {
+          await assignWorkerToCrop(wId, newId);
+        }
+      }
 
       // Copy Attendance if selected
       if (copyAttendanceFlag) {
@@ -690,7 +724,7 @@ export default function App() {
                     <span className="text-primary truncate">
                       {selectedCropCycleId === 'all' 
                         ? t('allCrops', lang) 
-                        : selectedCropCycleId === 'legacy'
+                        : selectedCropCycleId === 'legacy_crop_2025_2026'
                           ? t('legacyRecords', lang)
                           : (() => {
                               const c = cropCycles.find(c => c.id === selectedCropCycleId);
@@ -726,17 +760,17 @@ export default function App() {
 
                         <button
                           onClick={() => {
-                            setSelectedCropCycleId('legacy');
-                            localStorage.setItem('paramesh_selected_crop_cycle_id', 'legacy');
+                            setSelectedCropCycleId('legacy_crop_2025_2026');
+                            localStorage.setItem('paramesh_selected_crop_cycle_id', 'legacy_crop_2025_2026');
                             setIsCropDropdownOpen(false);
                           }}
-                          className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === 'legacy' ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
+                          className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === 'legacy_crop_2025_2026' ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
                         >
                           <span>{t('legacyRecords', lang)}</span>
-                          {selectedCropCycleId === 'legacy' && <Check size={12} className="text-primary" />}
+                          {selectedCropCycleId === 'legacy_crop_2025_2026' && <Check size={12} className="text-primary" />}
                         </button>
 
-                        {cropCycles.map(crop => (
+                        {cropCycles.filter(c => c.id !== 'legacy_crop_2025_2026').map(crop => (
                           <button
                             key={crop.id}
                             onClick={() => {
@@ -755,7 +789,7 @@ export default function App() {
                         ))}
                       </div>
 
-                      <div className="border-t border-gray-100 p-1">
+                      <div className="border-t border-gray-100 p-1 space-y-1">
                         <button
                           onClick={() => {
                             setIsCropDropdownOpen(false);
@@ -777,6 +811,17 @@ export default function App() {
                         >
                           <Plus size={12} />
                           {t('addCropCycle', lang)}
+                        </button>
+                        
+                        <button
+                          onClick={() => {
+                            setIsCropDropdownOpen(false);
+                            setShowManageCropsModal(true);
+                          }}
+                          className="w-full py-2 bg-[#F9A825]/10 text-[#8B6E30] font-bold text-xs rounded-lg flex items-center justify-center gap-1.5 hover:bg-[#F9A825]/15 transition-all cursor-pointer"
+                        >
+                          <Sprout size={12} />
+                          {t('manageCropCycles', lang)}
                         </button>
                       </div>
                     </motion.div>
@@ -985,6 +1030,21 @@ export default function App() {
                     />
                   </div>
 
+                  <div className="flex flex-col gap-1 col-span-2">
+                    <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('irrigationType', lang)}</label>
+                    <select
+                      value={newCropIrrigationType}
+                      onChange={(e) => setNewCropIrrigationType(e.target.value as any)}
+                      className="form-input text-xs"
+                    >
+                      <option value="Drip">{t('irrigationType_Drip', lang)}</option>
+                      <option value="Sprinkler">{t('irrigationType_Sprinkler', lang)}</option>
+                      <option value="Flow">{t('irrigationType_Flow', lang)}</option>
+                      <option value="Rainfed">{t('irrigationType_Rainfed', lang)}</option>
+                      <option value="Other">{t('irrigationType_Other', lang)}</option>
+                    </select>
+                  </div>
+
                   <div className="flex flex-col gap-1">
                     <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('startDate', lang)} *</label>
                     <input
@@ -1088,6 +1148,623 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Manage Crop Cycles Modal */}
+      <AnimatePresence>
+        {showManageCropsModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white w-full max-w-lg rounded-3xl p-6 shadow-premium relative border border-[#E0DBC5] max-h-[85vh] overflow-y-auto no-scrollbar"
+            >
+              <button 
+                onClick={() => {
+                  setShowManageCropsModal(false);
+                  setEditingCropCycle(null);
+                  setShowWorkerAssignmentsCrop(null);
+                }}
+                className="absolute top-4 right-4 p-1.5 bg-gray-100 rounded-full text-gray-500 active:scale-90"
+              >
+                <X size={18} />
+              </button>
+
+              <h3 className="text-lg font-bold text-text-dark mb-4 flex items-center gap-2">
+                <Sprout className="text-primary" size={20} />
+                {bilingual ? 'Manage Crop Cycles / పంటల నిర్వహణ' : 'Manage Crop Cycles'}
+              </h3>
+
+              {showWorkerAssignmentsCrop ? (
+                <WorkerAssignmentsManager
+                  crop={showWorkerAssignmentsCrop}
+                  onBack={() => setShowWorkerAssignmentsCrop(null)}
+                  lang={lang}
+                  bilingual={bilingual}
+                  allWorkers={allWorkers}
+                  workerCrops={workerCrops}
+                  onRefresh={loadCropCycles}
+                  showToast={showToast}
+                />
+              ) : editingCropCycle ? (
+                <EditCropForm
+                  crop={editingCropCycle}
+                  onBack={() => setEditingCropCycle(null)}
+                  lang={lang}
+                  bilingual={bilingual}
+                  onRefresh={loadCropCycles}
+                  showToast={showToast}
+                />
+              ) : (
+                <CropsList
+                  cropCycles={cropCycles}
+                  onEdit={(c) => setEditingCropCycle(c)}
+                  onDuplicate={(c) => {
+                    setNewCropName(c.cropName);
+                    setNewCropSeason(c.season);
+                    setNewCropVariety(c.variety || '');
+                    setNewCropLandName(c.landName || '');
+                    setNewCropArea(c.area || '');
+                    setNewCropIrrigationType(c.irrigationType || 'Other');
+                    setNewCropStartDate(c.startDate || '');
+                    setNewCropExpectedHarvestDate(c.expectedHarvestDate || '');
+                    setNewCropNotes(c.notes || '');
+                    
+                    setShowManageCropsModal(false);
+                    setShowNewCropModal(true);
+                    showToast("Crop details duplicated! Review and save.", "success");
+                  }}
+                  onDelete={async (cropId) => {
+                    const check = await canDeleteCropCycle(cropId);
+                    if (!check.canDelete) {
+                      const msg = bilingual 
+                        ? `పంటను తొలగించలేము. ఈ పంటకు ${check.attendanceCount} హాజరు, ${check.paymentCount} చెల్లింపులు, మరియు ${check.expenseCount} ఖర్చులు ఉన్నాయి.`
+                        : `Cannot delete crop cycle. It has ${check.attendanceCount} attendance records, ${check.paymentCount} payments, and ${check.expenseCount} expenses linked to it.`;
+                      alert(msg);
+                      return;
+                    }
+                    if (window.confirm("Are you sure you want to delete this crop cycle? This action is permanent and cannot be undone.")) {
+                      try {
+                        await removeCropCycle(cropId);
+                        showToast(t('cropDeleteSuccess', lang), "success");
+                        await loadCropCycles();
+                      } catch (e) {
+                        showToast("Failed to delete crop cycle", "error");
+                      }
+                    }
+                  }}
+                  onManageWorkers={(c) => setShowWorkerAssignmentsCrop(c)}
+                  lang={lang}
+                  bilingual={bilingual}
+                />
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
+
+// ----------------------------------------------------
+// Sub-components for Crop CRUD & Worker Assignments
+// ----------------------------------------------------
+
+interface CropsListProps {
+  cropCycles: CropCycle[];
+  onEdit: (crop: CropCycle) => void;
+  onDuplicate: (crop: CropCycle) => void;
+  onDelete: (cropId: string) => void;
+  onManageWorkers: (crop: CropCycle) => void;
+  lang: Language;
+  bilingual: boolean;
+}
+
+const CropsList: React.FC<CropsListProps> = ({
+  cropCycles,
+  onEdit,
+  onDuplicate,
+  onDelete,
+  onManageWorkers,
+  lang,
+  bilingual
+}) => {
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'active' | 'completed' | 'archived'>('all');
+
+  const filtered = cropCycles
+    .filter(c => {
+      const matchSearch = c.cropName.toLowerCase().includes(search.toLowerCase()) || 
+                          c.season.toLowerCase().includes(search.toLowerCase());
+      const matchStatus = filterStatus === 'all' || c.status === filterStatus;
+      return matchSearch && matchStatus;
+    });
+
+  return (
+    <div className="space-y-4">
+      {/* Search and Filters */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search crop name or season..."
+          className="flex-1 bg-gray-50 border border-[#E0DBC5] text-text-dark rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-primary placeholder-gray-400"
+        />
+        <select
+          value={filterStatus}
+          onChange={(e: any) => setFilterStatus(e.target.value)}
+          className="bg-gray-50 border border-[#E0DBC5] text-text-dark rounded-xl py-2 px-3 text-xs focus:outline-none focus:border-primary"
+        >
+          <option value="all">All Statuses</option>
+          <option value="active">Active Only</option>
+          <option value="completed">Completed Only</option>
+          <option value="archived">Archived Only</option>
+        </select>
+      </div>
+
+      <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1 no-scrollbar">
+        {filtered.length === 0 ? (
+          <p className="text-xs text-gray-400 text-center py-6 font-semibold">No crop cycles found.</p>
+        ) : (
+          filtered.map(c => (
+            <div key={c.id} className="bg-gray-50 p-3.5 border border-[#E0DBC5]/40 rounded-2xl flex flex-col gap-2.5">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h4 className="font-bold text-sm text-text-dark leading-tight">{c.cropName} ({c.season})</h4>
+                  <span className="text-[10px] text-gray-400 font-semibold block mt-1">
+                    Variety: {c.variety || 'N/A'} • Irrigation: {c.irrigationType || 'Other'} • Land: {c.landName || 'N/A'} ({c.area || '0'} acres)
+                  </span>
+                </div>
+                <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+                  c.status === 'active' 
+                    ? 'bg-success-green/10 text-success-green' 
+                    : c.status === 'completed'
+                      ? 'bg-primary/10 text-primary'
+                      : 'bg-gray-200 text-gray-500'
+                }`}>
+                  {c.status}
+                </span>
+              </div>
+
+              {/* Actions */}
+              <div className="flex gap-2 justify-end border-t border-gray-200/50 pt-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onManageWorkers(c)}
+                  className="px-2.5 py-1.5 bg-primary/10 text-primary rounded-lg text-[10px] font-bold active:scale-95 cursor-pointer"
+                >
+                  Manage Workers
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onEdit(c)}
+                  className="px-2.5 py-1.5 bg-accent/10 text-accent rounded-lg text-[10px] font-bold active:scale-95 cursor-pointer"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDuplicate(c)}
+                  className="px-2.5 py-1.5 bg-gray-100 text-gray-600 rounded-lg text-[10px] font-bold active:scale-95 cursor-pointer"
+                >
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onDelete(c.id)}
+                  className="px-2.5 py-1.5 bg-danger-red/10 text-danger-red rounded-lg text-[10px] font-bold active:scale-95 cursor-pointer"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};
+
+interface EditCropFormProps {
+  crop: CropCycle;
+  onBack: () => void;
+  lang: Language;
+  bilingual: boolean;
+  onRefresh: () => Promise<void>;
+  showToast: (message: string, type: 'success' | 'error') => void;
+}
+
+const EditCropForm: React.FC<EditCropFormProps> = ({
+  crop,
+  onBack,
+  lang,
+  bilingual,
+  onRefresh,
+  showToast
+}) => {
+  const [name, setName] = useState(crop.cropName);
+  const [season, setSeason] = useState(crop.season);
+  const [variety, setVariety] = useState(crop.variety || '');
+  const [land, setLand] = useState(crop.landName || '');
+  const [area, setArea] = useState(crop.area || '');
+  const [irrigation, setIrrigation] = useState(crop.irrigationType || 'Other');
+  const [start, setStart] = useState(crop.startDate || '');
+  const [end, setEnd] = useState(crop.expectedHarvestDate || '');
+  const [actualEnd, setActualEnd] = useState(crop.actualHarvestDate || '');
+  const [status, setStatus] = useState(crop.status || 'active');
+  const [notes, setNotes] = useState(crop.notes || '');
+  const [revenue, setRevenue] = useState(crop.harvestRevenue !== undefined ? crop.harvestRevenue.toString() : '');
+  const [yieldQty, setYieldQty] = useState(crop.harvestYield || '');
+  const [saving, setSaving] = useState(false);
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || !season.trim() || !start.trim() || !end.trim()) {
+      showToast("Please fill in all required fields", "error");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const updatedData: Partial<CropCycle> = {
+        cropName: name.trim(),
+        season: season.trim(),
+        variety: variety.trim(),
+        landName: land.trim(),
+        area: area.trim(),
+        irrigationType: irrigation as any,
+        startDate: start,
+        expectedHarvestDate: end,
+        actualHarvestDate: status === 'completed' ? (actualEnd || new Date().toISOString().split('T')[0]) : '',
+        status: status as any,
+        notes: notes.trim(),
+        harvestRevenue: revenue ? parseFloat(revenue) : 0,
+        harvestYield: yieldQty.trim(),
+        updatedAt: new Date().toISOString()
+      };
+
+      await editCropCycle(crop.id, updatedData);
+      showToast("Crop cycle updated successfully!", "success");
+      await onRefresh();
+      onBack();
+    } catch (err) {
+      showToast("Failed to update crop cycle", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleUpdate} className="space-y-4">
+      <div className="flex items-center gap-2 mb-2">
+        <button type="button" onClick={onBack} className="text-xs text-gray-500 font-bold hover:underline cursor-pointer">
+          &larr; Back to List
+        </button>
+        <span className="text-gray-300">|</span>
+        <span className="text-xs font-bold text-gray-400">Editing Crop Details</span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 max-h-96 overflow-y-auto p-1 no-scrollbar">
+        <div className="flex flex-col gap-1 col-span-2">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('cropName', lang)} *</label>
+          <input
+            type="text"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('variety', lang)}</label>
+          <input
+            type="text"
+            value={variety}
+            onChange={(e) => setVariety(e.target.value)}
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('season', lang)} *</label>
+          <input
+            type="text"
+            required
+            value={season}
+            onChange={(e) => setSeason(e.target.value)}
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('landName', lang)}</label>
+          <input
+            type="text"
+            value={land}
+            onChange={(e) => setLand(e.target.value)}
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('area', lang)}</label>
+          <input
+            type="text"
+            value={area}
+            onChange={(e) => setArea(e.target.value)}
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1 col-span-2">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('irrigationType', lang)}</label>
+          <select
+            value={irrigation}
+            onChange={(e: any) => setIrrigation(e.target.value)}
+            className="form-input text-xs"
+          >
+            <option value="Drip">{t('irrigationType_Drip', lang)}</option>
+            <option value="Sprinkler">{t('irrigationType_Sprinkler', lang)}</option>
+            <option value="Flow">{t('irrigationType_Flow', lang)}</option>
+            <option value="Rainfed">{t('irrigationType_Rainfed', lang)}</option>
+            <option value="Other">{t('irrigationType_Other', lang)}</option>
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('startDate', lang)} *</label>
+          <input
+            type="date"
+            required
+            value={start}
+            onChange={(e) => setStart(e.target.value)}
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('expectedHarvestDate', lang)} *</label>
+          <input
+            type="date"
+            required
+            value={end}
+            onChange={(e) => setEnd(e.target.value)}
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('harvestRevenue', lang)}</label>
+          <input
+            type="number"
+            value={revenue}
+            onChange={(e) => setRevenue(e.target.value)}
+            placeholder="e.g. 150000"
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('harvestYield', lang)}</label>
+          <input
+            type="text"
+            value={yieldQty}
+            onChange={(e) => setYieldQty(e.target.value)}
+            placeholder="e.g. 50 Bags, 3 Tons"
+            className="form-input text-xs"
+          />
+        </div>
+
+        <div className="flex flex-col gap-1 col-span-2">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">Status</label>
+          <select
+            value={status}
+            onChange={(e: any) => setStatus(e.target.value)}
+            className="form-input text-xs"
+          >
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="archived">Archived</option>
+          </select>
+        </div>
+
+        {status === 'completed' && (
+          <div className="flex flex-col gap-1 col-span-2">
+            <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">Actual Harvest Date</label>
+            <input
+              type="date"
+              value={actualEnd}
+              onChange={(e) => setActualEnd(e.target.value)}
+              className="form-input text-xs"
+            />
+          </div>
+        )}
+
+        <div className="flex flex-col gap-1 col-span-2">
+          <label className="text-[10px] font-bold text-gray-400 uppercase pl-1">{t('notes', lang)}</label>
+          <textarea
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="form-input text-xs"
+            rows={2}
+          />
+        </div>
+      </div>
+
+      <div className="flex gap-2 pt-2 border-t border-gray-100">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex-1 py-2.5 bg-gray-100 text-gray-600 font-bold rounded-xl active:scale-95 text-xs cursor-pointer"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={saving}
+          className="flex-1 py-2.5 bg-primary text-white font-bold rounded-xl active:scale-95 text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+        >
+          {saving ? (
+            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+          ) : (
+            'Save Changes'
+          )}
+        </button>
+      </div>
+    </form>
+  );
+};
+
+interface WorkerAssignmentsManagerProps {
+  crop: CropCycle;
+  onBack: () => void;
+  lang: Language;
+  bilingual: boolean;
+  allWorkers: Worker[];
+  workerCrops: WorkerCrop[];
+  onRefresh: () => Promise<void>;
+  showToast: (message: string, type: 'success' | 'error') => void;
+}
+
+const WorkerAssignmentsManager: React.FC<WorkerAssignmentsManagerProps> = ({
+  crop,
+  onBack,
+  lang,
+  bilingual,
+  allWorkers,
+  workerCrops,
+  onRefresh,
+  showToast
+}) => {
+  const [search, setSearch] = useState('');
+  const [assigning, setAssigning] = useState(false);
+
+  // Find workers currently assigned to this crop cycle
+  const assignedWorkerIds = workerCrops
+    .filter(wc => wc.cropCycleId === crop.id)
+    .map(wc => wc.workerId);
+
+  const assignedWorkersList = allWorkers.filter(w => assignedWorkerIds.includes(w.id));
+  const unassignedWorkersList = allWorkers.filter(w => !assignedWorkerIds.includes(w.id) && w.status === 'active');
+
+  const filteredAssigned = assignedWorkersList.filter(w => 
+    w.name.toLowerCase().includes(search.toLowerCase()) || 
+    (w.village && w.village.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const handleAssign = async (workerId: string) => {
+    setAssigning(true);
+    try {
+      await assignWorkerToCrop(workerId, crop.id);
+      showToast("Worker assigned successfully", "success");
+      await onRefresh();
+    } catch (e) {
+      showToast("Failed to assign worker", "error");
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  const handleUnassign = async (workerId: string) => {
+    if (!window.confirm("Are you sure you want to unassign this worker from this crop cycle?")) {
+      return;
+    }
+    setAssigning(true);
+    try {
+      await unassignWorkerFromCrop(workerId, crop.id);
+      showToast("Worker unassigned successfully", "success");
+      await onRefresh();
+    } catch (e) {
+      showToast("Failed to unassign worker", "error");
+    } finally {
+      setAssigning(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2 mb-2 border-b border-gray-100 pb-2">
+        <button type="button" onClick={onBack} className="text-xs text-gray-500 font-bold hover:underline cursor-pointer">
+          &larr; Back to Crops
+        </button>
+        <span className="text-gray-300">|</span>
+        <span className="text-xs font-bold text-gray-400">Worker Assignments for: <strong className="text-text-dark">{crop.cropName}</strong></span>
+      </div>
+
+      <div className="relative">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={t('searchAssignedWorkers', lang)}
+          className="w-full bg-gray-50 border border-[#E0DBC5] text-text-dark rounded-xl py-2 px-3 pl-8 text-xs focus:outline-none focus:border-primary placeholder-gray-400"
+        />
+        <Search className="absolute left-2.5 top-2.5 text-gray-400" size={13} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        {/* Assigned Workers Column */}
+        <div className="border border-gray-100 rounded-2xl p-3 bg-gray-50/50">
+          <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 border-b border-gray-100 pb-1">
+            Assigned Workers ({filteredAssigned.length})
+          </h4>
+          <div className="space-y-1.5 max-h-60 overflow-y-auto no-scrollbar">
+            {filteredAssigned.length === 0 ? (
+              <p className="text-[10px] text-gray-400 italic py-4 text-center">No assigned workers.</p>
+            ) : (
+              filteredAssigned.map(w => (
+                <div key={w.id} className="bg-white p-2 rounded-xl border border-gray-100 flex items-center justify-between text-xs font-medium">
+                  <div className="min-w-0 flex-1 pr-2">
+                    <span className="block font-bold text-text-dark truncate leading-tight">{w.name}</span>
+                    <span className="block text-[8px] text-gray-400 truncate">{w.village || 'No Village'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleUnassign(w.id)}
+                    disabled={assigning}
+                    className="p-1 text-danger-red hover:bg-danger-red/10 rounded-lg active:scale-90 cursor-pointer shrink-0"
+                    title="Unassign"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Unassigned Workers Column */}
+        <div className="border border-gray-100 rounded-2xl p-3 bg-gray-50/50">
+          <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 border-b border-gray-100 pb-1">
+            Available Workers ({unassignedWorkersList.length})
+          </h4>
+          <div className="space-y-1.5 max-h-60 overflow-y-auto no-scrollbar">
+            {unassignedWorkersList.length === 0 ? (
+              <p className="text-[10px] text-gray-400 italic py-4 text-center">All workers assigned.</p>
+            ) : (
+              unassignedWorkersList.map(w => (
+                <div key={w.id} className="bg-white p-2 rounded-xl border border-gray-100 flex items-center justify-between text-xs font-medium">
+                  <div className="min-w-0 flex-1 pr-2">
+                    <span className="block font-bold text-text-dark truncate leading-tight">{w.name}</span>
+                    <span className="block text-[8px] text-gray-400 truncate">{w.village || 'No Village'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleAssign(w.id)}
+                    disabled={assigning}
+                    className="p-1 text-success-green hover:bg-success-green/10 rounded-lg active:scale-90 cursor-pointer shrink-0"
+                    title="Assign"
+                  >
+                    <Plus size={13} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

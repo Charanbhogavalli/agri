@@ -88,7 +88,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
       // Determine workers associated with selected crop cycle
       const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
       const assignedIds = cropObj ? cropObj.workerIds || [] : [];
-      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026' 
         ? workersData 
         : workersData.filter(w => assignedIds.includes(w.id));
 
@@ -146,7 +146,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
     const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
     const assignedIds = cropObj ? cropObj.workerIds || [] : [];
-    const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+    const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026' 
       ? workers 
       : workers.filter(w => assignedIds.includes(w.id));
 
@@ -194,7 +194,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
           wageForDay,
           workType: registerWorkTypes[workerId] || '',
           notes: registerNotes[workerId] || '',
-          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
+          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy_crop_2025_2026'
         };
       });
 
@@ -289,7 +289,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
   const assignedCropWorkerIds = activeCropObj ? activeCropObj.workerIds || [] : [];
   const activeWorkers = workers.filter(w => 
     w.status === 'active' && 
-    (selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' || assignedCropWorkerIds.includes(w.id))
+    (selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026' || assignedCropWorkerIds.includes(w.id))
   );
   const filteredRegisterWorkers = activeWorkers.filter(w => 
     w.name.toLowerCase().includes(registerSearch.toLowerCase()) ||
@@ -387,7 +387,7 @@ export const AttendanceView: React.FC<AttendanceViewProps> = ({
 
         {/* ----------------- REGISTER TAB VIEW ----------------- */}
         {activeTab === 'register' && (
-          selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' ? (
+          selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026' ? (
             <div className="bg-white border border-[#E0DBC5]/40 rounded-3xl p-8 text-center shadow-soft my-6">
               <Calendar className="mx-auto text-primary mb-3 animate-pulse" size={48} />
               <h3 className="text-base font-bold text-text-dark">

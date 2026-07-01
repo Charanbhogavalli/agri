@@ -14,7 +14,10 @@ import {
   fetchAttendance,
   CropCycle,
   filterByCrop,
-  editCropCycle
+  editCropCycle,
+  calculateWorkerEarnings,
+  calculateWorkerPayments,
+  calculateWorkerPending
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import { getLocalDateString } from '../utils/date';
@@ -77,7 +80,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       // Find workers assigned to crop cycle if specific one is selected
       const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
       const assignedIds = cropObj ? cropObj.workerIds || [] : [];
-      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026' 
         ? workersData 
         : workersData.filter(w => assignedIds.includes(w.id));
 
@@ -161,7 +164,7 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       } else {
         if (!window.confirm("Are you sure you want to add this new worker?")) return;
         const newId = await createWorker(workerData);
-        if (selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy') {
+        if (selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy_crop_2025_2026') {
           const activeCrop = cropCycles.find(c => c.id === selectedCropCycleId);
           if (activeCrop) {
             const currentWorkerIds = activeCrop.workerIds || [];
@@ -193,6 +196,11 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       return;
     }
 
+    if (amtNum > activeWorkerForPay.pending) {
+      showToast(t('validationPayExceedsPending', lang), "error");
+      return;
+    }
+
     setSavingPayment(true);
     try {
       if (!window.confirm(`Are you sure you want to record a payment of ₹${amtNum} to ${activeWorkerForPay.worker.name}?`)) {
@@ -204,14 +212,14 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
         amount: amtNum,
         date: payDate,
         note: payNote.trim() || 'Wage Payment',
-        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
+        cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy_crop_2025_2026'
       });
 
       showToast(t('paymentSuccess', lang), "success");
       setShowPayModal(false);
       loadData(); // Refresh all calculations
-    } catch (err) {
-      showToast("Failed to record payment", "error");
+    } catch (err: any) {
+      showToast(err.message || "Failed to record payment", "error");
     } finally {
       setSavingPayment(false);
     }
@@ -223,8 +231,8 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
         await removeWorker(id);
         showToast("Worker deleted successfully", "success");
         loadData();
-      } catch (error) {
-        showToast("Failed to delete worker", "error");
+      } catch (error: any) {
+        showToast(error.message || "Failed to delete worker", "error");
       }
     }
   };
@@ -352,16 +360,9 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
       ) : (
         <div className="space-y-4 flex-1">
           {sortedAndFilteredWorkers.map(w => {
-            // Wage calculations (incorporating variable wages and half days)
-            const workerAtt = attendance.filter(a => a.workerId === w.id);
-            const earned = workerAtt.reduce((sum, a) => {
-              const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
-              if (a.status === 'present') return sum + wage;
-              if (a.status === 'half_day') return sum + wage * 0.5;
-              return sum;
-            }, 0);
-            const paid = payments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
-            const pending = earned - paid;
+            const earned = calculateWorkerEarnings(w, attendance);
+            const paid = calculateWorkerPayments(w, payments);
+            const pending = calculateWorkerPending(w, attendance, payments);
             const pendingVal = pending > 0 ? pending : 0;
             const advanceVal = pending < 0 ? Math.abs(pending) : 0;
 
@@ -756,14 +757,9 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                 const wPay = payments.filter(p => p.workerId === historyWorker.id);
                 const pDays = wAtt.filter(a => a.status === 'present').length;
                 const hDays = wAtt.filter(a => a.status === 'half_day').length;
-                const totalEarned = wAtt.reduce((sum, a) => {
-                  const wage = a.wageForDay !== undefined ? a.wageForDay : historyWorker.dailyWage;
-                  if (a.status === 'present') return sum + wage;
-                  if (a.status === 'half_day') return sum + wage * 0.5;
-                  return sum;
-                }, 0);
-                const totalPaid = wPay.reduce((sum, p) => sum + p.amount, 0);
-                const balance = totalEarned - totalPaid;
+                const totalEarned = calculateWorkerEarnings(historyWorker, attendance);
+                const totalPaid = calculateWorkerPayments(historyWorker, payments);
+                const balance = calculateWorkerPending(historyWorker, attendance, payments);
                 
                 return (
                   <>
@@ -876,14 +872,9 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                             const pDays = cycleAtt.filter(a => a.status === 'present').length;
                             const hDays = cycleAtt.filter(a => a.status === 'half_day').length;
                             const days = pDays + hDays * 0.5;
-                            const earned = cycleAtt.reduce((sum, a) => {
-                              const wage = a.wageForDay !== undefined ? a.wageForDay : historyWorker.dailyWage;
-                              if (a.status === 'present') return sum + wage;
-                              if (a.status === 'half_day') return sum + wage * 0.5;
-                              return sum;
-                            }, 0);
-                            const paid = cyclePay.reduce((sum, p) => sum + p.amount, 0);
-                            const balance = earned - paid;
+                            const earned = calculateWorkerEarnings(historyWorker, cycleAtt);
+                            const paid = calculateWorkerPayments(historyWorker, cyclePay);
+                            const balance = calculateWorkerPending(historyWorker, cycleAtt, cyclePay);
                             return { name: c.cropName, season: c.season, days, earned, paid, balance };
                           }).filter(row => row.days > 0 || row.paid > 0);
 
@@ -893,14 +884,9 @@ export const WorkersView: React.FC<WorkersViewProps> = ({
                           const lpDays = legacyAtt.filter(a => a.status === 'present').length;
                           const lhDays = legacyAtt.filter(a => a.status === 'half_day').length;
                           const legacyDays = lpDays + lhDays * 0.5;
-                          const legacyEarned = legacyAtt.reduce((sum, a) => {
-                            const wage = a.wageForDay !== undefined ? a.wageForDay : historyWorker.dailyWage;
-                            if (a.status === 'present') return sum + wage;
-                            if (a.status === 'half_day') return sum + wage * 0.5;
-                            return sum;
-                          }, 0);
-                          const legacyPaid = legacyPay.reduce((sum, p) => sum + p.amount, 0);
-                          const legacyBalance = legacyEarned - legacyPaid;
+                          const legacyEarned = calculateWorkerEarnings(historyWorker, legacyAtt);
+                          const legacyPaid = calculateWorkerPayments(historyWorker, legacyPay);
+                          const legacyBalance = calculateWorkerPending(historyWorker, legacyAtt, legacyPay);
 
                           if (legacyDays > 0 || legacyPaid > 0) {
                             cropRows.push({

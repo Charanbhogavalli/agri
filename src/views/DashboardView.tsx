@@ -31,7 +31,9 @@ import {
   createExpense,
   CropCycle,
   filterByCrop,
-  editCropCycle
+  editCropCycle,
+  calculateWorkerEarnings,
+  calculateWorkerPayments
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import { parseNaturalLanguage, getInsightsList, AIObservation, ParsedTransaction } from '../services/gemini';
@@ -202,7 +204,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           amount: parsedResult.amount,
           date: parsedResult.date,
           note: parsedResult.description,
-          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
+          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy_crop_2025_2026'
         });
         showToast(t('paymentSuccess', lang), "success");
       } else if (parsedResult.type === 'expense') {
@@ -212,7 +214,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           description: parsedResult.description,
           notes: '',
           date: parsedResult.date,
-          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy'
+          cropCycleId: selectedCropCycleId !== 'all' ? selectedCropCycleId : 'legacy_crop_2025_2026'
         });
         showToast(t('expenseSuccess', lang), "success");
       } else {
@@ -221,11 +223,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       }
 
       setShowConfirmModal(false);
-      setNlpText('');
       setParsedResult(null);
-      loadData(); // Reload stats
-    } catch (error) {
-      showToast("Error saving transaction", "error");
+      setNlpText('');
+      if (onRefreshCropCycles) onRefreshCropCycles();
+    } catch (err: any) {
+      showToast(err.message || "Failed to record transaction", "error");
     }
   };
 
@@ -237,32 +239,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     if (a.status === 'half_day') return sum + 0.5;
     return sum;
   }, 0);
-  const activeWorkersCount = workers.filter(w => w.status === 'active').length;
 
-  const currentMonthExpenses = expenses
-    .filter(e => e.date.startsWith(currentMonthStr))
-    .reduce((sum, e) => sum + e.amount, 0);
+  const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
+  const assignedIds = cropObj ? cropObj.workerIds || [] : [];
+  const activeWorkersCount = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026'
+    ? workers.filter(w => w.status === 'active').length
+    : workers.filter(w => w.status === 'active' && assignedIds.includes(w.id)).length;
 
-  const currentMonthPayments = payments
-    .filter(p => p.date.startsWith(currentMonthStr))
-    .reduce((sum, p) => sum + p.amount, 0);
+  const totalExpensesCost = expenses.reduce((sum, e) => {
+    const amt = typeof e.amount === 'number' ? e.amount : parseFloat(e.amount as any) || 0;
+    return sum + amt;
+  }, 0);
 
-  const currentMonthAttendance = allAttendance.filter((a: any) => a.date.startsWith(currentMonthStr));
-  
-  let totalLaborCost = 0;
-  workers.forEach(w => {
-    const workerAtt = currentMonthAttendance.filter((a: any) => a.workerId === w.id);
-    const earned = workerAtt.reduce((sum, a) => {
-      const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
-      if (a.status === 'present') return sum + wage;
-      if (a.status === 'half_day') return sum + wage * 0.5;
-      return sum;
-    }, 0);
-    totalLaborCost += earned;
-  });
+  const totalPaidCost = workers.reduce((sum, w) => {
+    return sum + calculateWorkerPayments(w, payments);
+  }, 0);
 
-  const pendingWages = Math.max(0, totalLaborCost - currentMonthPayments);
-  const totalSpending = totalLaborCost + currentMonthExpenses;
+  const totalLaborCost = workers.reduce((sum, w) => {
+    return sum + calculateWorkerEarnings(w, allAttendance);
+  }, 0);
+
+  const pendingWages = Math.max(0, totalLaborCost - totalPaidCost);
+  const totalSpending = totalLaborCost + totalExpensesCost;
 
   // 1. Highest Paid Worker (dynamic month)
   const payMap: Record<string, number> = {};
@@ -281,6 +279,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const highestPaidWorkerStr = topPaidWorker ? `${topPaidWorker.name} (₹${maxPay})` : 'None';
 
   // 2. Most Regular Worker (dynamic month)
+  const currentMonthAttendance = allAttendance.filter((a: any) => a.date.startsWith(currentMonthStr));
   const attMap: Record<string, number> = {};
   currentMonthAttendance.forEach((a: any) => {
     const weight = a.status === 'present' ? 1.0 : a.status === 'half_day' ? 0.5 : 0;
@@ -333,7 +332,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* Active Crop Cycle Info Card */}
-      {selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy' && (() => {
+      {selectedCropCycleId !== 'all' && selectedCropCycleId !== 'legacy_crop_2025_2026' && (() => {
         const crop = cropCycles.find(c => c.id === selectedCropCycleId);
         if (!crop) return null;
         
@@ -373,6 +372,41 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   Est. Harvest: {new Date(crop.expectedHarvestDate).toLocaleDateString()}
                 </div>
               )}
+            </div>
+
+            {/* Crop Financials Grid */}
+            <div className="grid grid-cols-3 gap-2 bg-[#F8F5E9]/50 p-3 rounded-2xl border border-[#E0DBC5]/45 text-center text-[10px]">
+              <div>
+                <span className="text-[8px] text-gray-400 font-bold block uppercase">Harvest Revenue</span>
+                <span className="text-xs font-black text-success-green block mt-1">₹{crop.harvestRevenue || 0}</span>
+              </div>
+              <div>
+                <span className="text-[8px] text-gray-400 font-bold block uppercase">Total Cost</span>
+                <span className="text-xs font-black text-danger-red block mt-1">₹{totalLaborCost + totalExpensesCost}</span>
+              </div>
+              <div>
+                <span className="text-[8px] text-gray-400 font-bold block uppercase">Net Profit</span>
+                {(() => {
+                  const profit = (crop.harvestRevenue || 0) - (totalLaborCost + totalExpensesCost);
+                  return (
+                    <span className={`text-xs font-black block mt-1 ${profit >= 0 ? 'text-success-green' : 'text-danger-red'}`}>
+                      ₹{profit}
+                    </span>
+                  );
+                })()}
+              </div>
+            </div>
+            
+            {/* Irrigation & Yield details */}
+            <div className="grid grid-cols-2 gap-2 text-[10px] pt-1">
+              <div className="bg-gray-50 p-2 rounded-xl border border-gray-100 flex justify-between">
+                <span className="text-gray-400 font-semibold">Irrigation:</span>
+                <span className="font-bold text-text-dark">{crop.irrigationType || 'Other'}</span>
+              </div>
+              <div className="bg-gray-50 p-2 rounded-xl border border-gray-100 flex justify-between">
+                <span className="text-gray-400 font-semibold">Yield:</span>
+                <span className="font-bold text-text-dark truncate max-w-[80px]">{crop.harvestYield || 'N/A'}</span>
+              </div>
             </div>
 
             {crop.status !== 'completed' && (
@@ -478,7 +512,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {t('totalExpenses', lang)}
             </span>
           </div>
-          <div className="text-lg font-black text-text-dark mt-1">₹{currentMonthExpenses}</div>
+          <div className="text-lg font-black text-text-dark mt-1">₹{totalExpensesCost}</div>
           {bilingual && <div className="text-[10px] text-gray-400 font-semibold">{subT('totalExpenses', lang)}</div>}
         </div>
 
@@ -493,7 +527,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {t('moneyPaid', lang)}
             </span>
           </div>
-          <div className="text-lg font-black text-success-green mt-1">₹{currentMonthPayments}</div>
+          <div className="text-lg font-black text-success-green mt-1">₹{totalPaidCost}</div>
           {bilingual && <div className="text-[10px] text-gray-400 font-semibold">{subT('moneyPaid', lang)}</div>}
         </div>
 

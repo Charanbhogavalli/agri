@@ -29,7 +29,10 @@ import {
   fetchPayments,
   fetchAttendance,
   CropCycle,
-  filterByCrop
+  filterByCrop,
+  calculateWorkerEarnings,
+  calculateWorkerPayments,
+  calculateWorkerPending
 } from '../firebase';
 import { t, subT, Language } from '../utils/translation';
 import { getLocalDateString } from '../utils/date';
@@ -107,7 +110,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     } else {
       const cropObj = cropCycles.find(c => c.id === selectedCropCycleId);
       const assignedIds = cropObj ? cropObj.workerIds || [] : [];
-      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy' 
+      const filteredWorkers = selectedCropCycleId === 'all' || selectedCropCycleId === 'legacy_crop_2025_2026' 
         ? rawWorkers 
         : rawWorkers.filter(w => assignedIds.includes(w.id));
 
@@ -177,14 +180,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       if (a.status === 'half_day') return sum + 0.5;
       return sum;
     }, 0);
-    const earned = workerAtt.reduce((sum, a) => {
-      const wage = a.wageForDay !== undefined ? a.wageForDay : w.dailyWage;
-      if (a.status === 'present') return sum + wage;
-      if (a.status === 'half_day') return sum + wage * 0.5;
-      return sum;
-    }, 0);
-    const paid = filteredPayments.filter(p => p.workerId === w.id).reduce((sum, p) => sum + p.amount, 0);
-    const pending = Math.max(0, earned - paid);
+    const earned = calculateWorkerEarnings(w, filteredAttendance);
+    const paid = calculateWorkerPayments(w, filteredPayments);
+    const pending = Math.max(0, calculateWorkerPending(w, filteredAttendance, filteredPayments));
     return {
       id: w.id,
       name: w.name,
@@ -570,7 +568,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                     Current Crop ({
                       selectedCropCycleId === 'all' 
                         ? t('allCrops', lang) 
-                        : selectedCropCycleId === 'legacy'
+                        : selectedCropCycleId === 'legacy_crop_2025_2026'
                           ? t('legacyRecords', lang)
                           : cropCycles.find(c => c.id === selectedCropCycleId)?.cropName || 'Selected Crop'
                     })
