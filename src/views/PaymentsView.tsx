@@ -227,7 +227,8 @@ export const PaymentsView: React.FC<PaymentsViewProps> = ({
 
     // Validation: prevent payment greater than pending (ignoring the current payment amount being updated)
     if (activeSummary) {
-      const maxAllowed = activeSummary.pendingAmount + editingPayment.amount;
+      const existingAmt = typeof editingPayment.amount === 'number' ? editingPayment.amount : parseFloat(editingPayment.amount as any) || 0;
+      const maxAllowed = activeSummary.pendingAmount + existingAmt;
       if (amtNum > maxAllowed) {
         showToast(t('validationPayExceedsPending', lang), "error");
         return;

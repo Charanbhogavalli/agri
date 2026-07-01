@@ -562,15 +562,15 @@ export const createPayment = async (payment: Omit<Payment, 'id' | 'createdAt'>):
     return newId;
   }
 
-  // Firestore uniqueness check
+  // Firestore uniqueness check (scoped to worker to avoid composite index requirements)
   const q = query(
     collection(db, 'payments'),
     where('ownerId', '==', uid),
-    where('workerId', '==', payment.workerId),
-    where('date', '==', payment.date)
+    where('workerId', '==', payment.workerId)
   );
   const qSnap = await getDocs(q);
-  if (!qSnap.empty) {
+  const duplicate = qSnap.docs.find(d => d.data().date === payment.date);
+  if (duplicate) {
     throw new Error("A payment has already been recorded for this worker on this date.");
   }
 
@@ -605,11 +605,10 @@ export const editPayment = async (id: string, payment: Partial<Payment>): Promis
     const q = query(
       collection(db, 'payments'),
       where('ownerId', '==', uid),
-      where('workerId', '==', targetWorkerId),
-      where('date', '==', targetDate)
+      where('workerId', '==', targetWorkerId)
     );
     const qSnap = await getDocs(q);
-    const duplicates = qSnap.docs.filter(d => d.id !== id);
+    const duplicates = qSnap.docs.filter(d => d.id !== id && d.data().date === targetDate);
     if (duplicates.length > 0) {
       throw new Error("A payment has already been recorded for this worker on this date.");
     }
