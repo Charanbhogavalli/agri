@@ -1069,18 +1069,25 @@ export const migrateLegacyRecords = async (): Promise<void> => {
     }
   }
 
-  // Double check: Does the legacy crop cycle document actually exist?
+  // Double check: Does the legacy crop cycle document actually exist and have correct name/status?
   if (resetAlreadyDone) {
     try {
       const legacyCropSnap = isMockMode 
         ? getMockData('paramesh_crop_cycles').find((c: any) => c.id === legacyCropId && c.ownerId === uid)
         : await getDoc(doc(db, 'cropCycles', legacyCropId));
 
-      const exists = isMockMode ? !!legacyCropSnap : (legacyCropSnap as any).exists();
+      let exists = false;
+      if (isMockMode) {
+        exists = !!legacyCropSnap && legacyCropSnap.cropName === 'Legacy Crop' && legacyCropSnap.status === 'active';
+      } else {
+        exists = (legacyCropSnap as any).exists() && 
+                 (legacyCropSnap as any).data()?.cropName === 'Legacy Crop' && 
+                 (legacyCropSnap as any).data()?.status === 'active';
+      }
       if (exists) {
         return;
       }
-      console.log("Legacy crop cycle document not found in database. Forcing reset execution...");
+      console.log("Legacy crop cycle document not found or invalid in database. Forcing reset execution...");
       localStorage.removeItem(completionKey);
     } catch (e) {
       console.warn("Error double-checking legacy crop cycle, forcing reset:", e);
@@ -1205,16 +1212,16 @@ export const migrateLegacyRecords = async (): Promise<void> => {
 
   const legacyCrop: CropCycle = {
     id: legacyCropId,
-    cropName: '2025 to 2026',
+    cropName: 'Legacy Crop',
     variety: 'Legacy',
-    season: '2025 to 2026',
+    season: '2025–2026',
     landName: 'Legacy Land',
     area: 'Various',
     irrigationType: 'Other',
     startDate: '2025-06-01',
     expectedHarvestDate: '2026-03-31',
     actualHarvestDate: '2026-03-31',
-    status: 'completed',
+    status: 'active',
     notes: 'One-time legacy backend Crop Cycle Reset.',
     ownerId: uid,
     ownerEmail: email,

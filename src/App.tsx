@@ -68,7 +68,13 @@ export default function App() {
   
   // Crop Cycle States
   const [selectedCropCycleId, setSelectedCropCycleId] = useState<string>(
-    () => localStorage.getItem('paramesh_selected_crop_cycle_id') || 'all'
+    () => {
+      const saved = localStorage.getItem('paramesh_selected_crop_cycle_id');
+      if (!saved || saved === 'all') {
+        return 'legacy_crop_2025_2026';
+      }
+      return saved;
+    }
   );
   const [cropCycles, setCropCycles] = useState<CropCycle[]>([]);
   const [showNewCropModal, setShowNewCropModal] = useState(false);
@@ -142,16 +148,22 @@ export default function App() {
       const savedSelectedId = localStorage.getItem('paramesh_selected_crop_cycle_id');
       
       if (!savedSelectedId || savedSelectedId === 'all' || !list.some(c => c.id === savedSelectedId)) {
-        const firstActive = list.find(c => c.status === 'active');
-        if (firstActive) {
-          setSelectedCropCycleId(firstActive.id);
-          localStorage.setItem('paramesh_selected_crop_cycle_id', firstActive.id);
-        } else if (list.length > 0) {
-          setSelectedCropCycleId(list[0].id);
-          localStorage.setItem('paramesh_selected_crop_cycle_id', list[0].id);
+        const legacyCrop = list.find(c => c.id === 'legacy_crop_2025_2026');
+        if (legacyCrop) {
+          setSelectedCropCycleId(legacyCrop.id);
+          localStorage.setItem('paramesh_selected_crop_cycle_id', legacyCrop.id);
         } else {
-          setSelectedCropCycleId('all');
-          localStorage.setItem('paramesh_selected_crop_cycle_id', 'all');
+          const firstActive = list.find(c => c.status === 'active');
+          if (firstActive) {
+            setSelectedCropCycleId(firstActive.id);
+            localStorage.setItem('paramesh_selected_crop_cycle_id', firstActive.id);
+          } else if (list.length > 0) {
+            setSelectedCropCycleId(list[0].id);
+            localStorage.setItem('paramesh_selected_crop_cycle_id', list[0].id);
+          } else {
+            setSelectedCropCycleId('all');
+            localStorage.setItem('paramesh_selected_crop_cycle_id', 'all');
+          }
         }
       }
     } catch (e) {
@@ -726,9 +738,7 @@ export default function App() {
                         ? t('allCrops', lang) 
                         : (() => {
                             const c = cropCycles.find(c => c.id === selectedCropCycleId);
-                            if (!c) return 'All Crops';
-                            if (c.id === 'legacy_crop_2025_2026') return '2025 to 2026';
-                            return `${c.cropName} (${c.season})`;
+                            return c ? `${c.cropName} (${c.season})` : 'All Crops';
                           })()
                       }
                     </span>
@@ -746,17 +756,7 @@ export default function App() {
                       className="absolute left-0 right-0 mt-1 bg-white border border-[#E0DBC5]/60 rounded-xl shadow-premium z-50 overflow-hidden"
                     >
                       <div className="max-h-60 overflow-y-auto py-1">
-                        <button
-                          onClick={() => {
-                            setSelectedCropCycleId('all');
-                            localStorage.setItem('paramesh_selected_crop_cycle_id', 'all');
-                            setIsCropDropdownOpen(false);
-                          }}
-                          className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === 'all' ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
-                        >
-                          <span>{t('allCrops', lang)}</span>
-                          {selectedCropCycleId === 'all' && <Check size={12} className="text-primary" />}
-                        </button>
+
 
                         {cropCycles.map(crop => (
                           <button
@@ -769,9 +769,7 @@ export default function App() {
                             className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === crop.id ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
                           >
                             <div className="min-w-0 flex-1">
-                              <span className="block font-bold truncate">
-                                {crop.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : `${crop.cropName} (${crop.season})`}
-                              </span>
+                              <span className="block font-bold truncate">{crop.cropName} ({crop.season})</span>
                               <span className="block text-[9px] text-gray-400 font-semibold">{crop.area || '0 Acres'} • {crop.status === 'completed' ? 'Completed' : 'Active'}</span>
                             </div>
                             {selectedCropCycleId === crop.id && <Check size={12} className="text-primary" />}
@@ -1301,9 +1299,7 @@ const CropsList: React.FC<CropsListProps> = ({
             <div key={c.id} className="bg-gray-50 p-3.5 border border-[#E0DBC5]/40 rounded-2xl flex flex-col gap-2.5">
               <div className="flex justify-between items-start">
                 <div>
-                  <h4 className="font-bold text-sm text-text-dark leading-tight">
-                    {c.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : `${c.cropName} (${c.season})`}
-                  </h4>
+                  <h4 className="font-bold text-sm text-text-dark leading-tight">{c.cropName} ({c.season})</h4>
                   <span className="text-[10px] text-gray-400 font-semibold block mt-1">
                     Variety: {c.variety || 'N/A'} • Irrigation: {c.irrigationType || 'Other'} • Land: {c.landName || 'N/A'} ({c.area || '0'} acres)
                   </span>
@@ -1682,7 +1678,7 @@ const WorkerAssignmentsManager: React.FC<WorkerAssignmentsManagerProps> = ({
           &larr; Back to Crops
         </button>
         <span className="text-gray-300">|</span>
-        <span className="text-xs font-bold text-gray-400">Worker Assignments for: <strong className="text-text-dark">{crop.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : crop.cropName}</strong></span>
+        <span className="text-xs font-bold text-gray-400">Worker Assignments for: <strong className="text-text-dark">{crop.cropName}</strong></span>
       </div>
 
       <div className="relative">
