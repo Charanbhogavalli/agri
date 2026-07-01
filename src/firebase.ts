@@ -908,6 +908,142 @@ export const subscribeToAuthChanges = (callback: (user: AppUser | null) => void)
   });
 };
 
+export const seedPresetWorkers = async (uid: string, email: string): Promise<void> => {
+  const legacyCropId = 'legacy_crop_2025_2026';
+  const createdAt = new Date().toISOString();
+
+  // Ensure 2025-2026 legacy crop cycle exists first
+  if (isMockMode) {
+    const crops = getMockData('paramesh_crop_cycles');
+    if (!crops.some(c => c.id === legacyCropId)) {
+      crops.push({
+        id: legacyCropId,
+        name: 'Legacy Crop',
+        season: '2025–2026',
+        status: 'active',
+        notes: 'Legacy records pre-migration',
+        createdAt,
+        ownerId: uid
+      });
+      setMockData('paramesh_crop_cycles', crops);
+    }
+  } else {
+    const cRef = doc(db, 'cropCycles', legacyCropId);
+    const cSnap = await getDoc(cRef);
+    if (!cSnap.exists()) {
+      await setDoc(cRef, {
+        name: 'Legacy Crop',
+        season: '2025–2026',
+        status: 'active',
+        notes: 'Legacy records pre-migration',
+        createdAt,
+        ownerId: uid
+      });
+    }
+  }
+
+  const presetWorkers = [
+    { name: 'Ramesh Kumar', dailyWage: 500, village: 'Peddapuram', status: 'active', phone: '9999999991' },
+    { name: 'Suresh Prasad', dailyWage: 450, village: 'Kakinada', status: 'active', phone: '9999999992' },
+    { name: 'Naresh Verma', dailyWage: 600, village: 'Samalkot', status: 'active', phone: '9999999993' },
+    { name: 'Rajesh Rao', dailyWage: 550, village: 'Peddapuram', status: 'active', phone: '9999999994' },
+    { name: 'Mahesh Babu', dailyWage: 500, village: 'Kakinada', status: 'active', phone: '9999999995' },
+    { name: 'Satish Goud', dailyWage: 400, village: 'Samalkot', status: 'active', phone: '9999999996' },
+    { name: 'Venkatesh Raju', dailyWage: 650, village: 'Peddapuram', status: 'active', phone: '9999999997' },
+    { name: 'Laxman Murthy', dailyWage: 500, village: 'Kakinada', status: 'inactive', phone: '9999999998' },
+    { name: 'Prasad Reddy', dailyWage: 450, village: 'Samalkot', status: 'inactive', phone: '9999999999' },
+    { name: 'Rambabu Garu', dailyWage: 550, village: 'Peddapuram', status: 'inactive', phone: '9999999900' },
+    { name: 'Kalyan Chakravarthy', dailyWage: 500, village: 'Peddapuram', status: 'active', phone: '9999999911' },
+    { name: 'Srinu Vasu', dailyWage: 450, village: 'Kakinada', status: 'active', phone: '9999999912' },
+    { name: 'Krishna Murthy', dailyWage: 600, village: 'Samalkot', status: 'active', phone: '9999999913' },
+    { name: 'Subba Rao', dailyWage: 400, village: 'Peddapuram', status: 'active', phone: '9999999914' },
+    { name: 'Apparao Chowdary', dailyWage: 550, village: 'Kakinada', status: 'active', phone: '9999999915' },
+    { name: 'Koteswara Rao', dailyWage: 500, village: 'Samalkot', status: 'active', phone: '9999999916' },
+    { name: 'Dharma Raju', dailyWage: 650, village: 'Peddapuram', status: 'active', phone: '9999999917' },
+    { name: 'Ganga Raju', dailyWage: 450, village: 'Kakinada', status: 'active', phone: '9999999918' },
+    { name: 'Brahmaji Rao', dailyWage: 500, village: 'Samalkot', status: 'active', phone: '9999999919' },
+    { name: 'Venkanna Garu', dailyWage: 600, village: 'Peddapuram', status: 'active', phone: '9999999920' },
+    { name: 'Ravi Teja', dailyWage: 500, village: 'Kakinada', status: 'active', phone: '9999999921' },
+    { name: 'Pavan Kalyan', dailyWage: 550, village: 'Samalkot', status: 'active', phone: '9999999922' },
+    { name: 'Chiranjeevi Rao', dailyWage: 650, village: 'Peddapuram', status: 'active', phone: '9999999923' },
+    { name: 'Nagarjuna Reddy', dailyWage: 500, village: 'Kakinada', status: 'active', phone: '9999999924' },
+    { name: 'Balakrishna Naidu', dailyWage: 500, village: 'Samalkot', status: 'inactive', phone: '9999999925' },
+    { name: 'Jagapati Babu', dailyWage: 450, village: 'Peddapuram', status: 'inactive', phone: '9999999926' },
+    { name: 'Srikanth Garu', dailyWage: 550, village: 'Kakinada', status: 'inactive', phone: '9999999927' },
+    { name: 'Tarun Kumar', dailyWage: 400, village: 'Samalkot', status: 'inactive', phone: '9999999928' },
+    { name: 'Uday Kiran', dailyWage: 500, village: 'Peddapuram', status: 'inactive', phone: '9999999929' },
+    { name: 'Venu Madhav', dailyWage: 450, village: 'Kakinada', status: 'inactive', phone: '9999999930' }
+  ];
+
+  if (isMockMode) {
+    const workers = getMockData('paramesh_workers');
+    if (workers.length === 0) {
+      const seededWorkers: Worker[] = [];
+      const seededRelations: any[] = [];
+      presetWorkers.forEach((pw, index) => {
+        const wId = 'w_preset_' + index;
+        seededWorkers.push({
+          id: wId,
+          name: pw.name,
+          dailyWage: pw.dailyWage,
+          village: pw.village,
+          status: pw.status as any,
+          phone: pw.phone,
+          notes: 'Seeded Preset Worker',
+          createdAt,
+          ownerId: uid,
+          ownerEmail: email
+        });
+        seededRelations.push({
+          id: `wc_preset_${index}`,
+          workerId: wId,
+          cropCycleId: legacyCropId,
+          ownerId: uid,
+          createdAt
+        });
+      });
+      setMockData('paramesh_workers', seededWorkers);
+      setMockData('paramesh_worker_crops', seededRelations);
+    }
+    return;
+  }
+
+  // Live Firestore check & seeding
+  const wCol = collection(db, 'workers');
+  const wSnap = await getDocs(query(wCol, where('ownerId', '==', uid)));
+  if (wSnap.empty) {
+    console.log("Seeding preset workers for user into 2025 season...");
+    const batch = writeBatch(db);
+    
+    presetWorkers.forEach((pw, index) => {
+      const wRef = doc(collection(db, 'workers'));
+      const workerId = wRef.id;
+      batch.set(wRef, {
+        name: pw.name,
+        dailyWage: pw.dailyWage,
+        village: pw.village,
+        status: pw.status,
+        phone: pw.phone,
+        notes: 'Seeded Preset Worker',
+        createdAt,
+        ownerId: uid,
+        ownerEmail: email
+      });
+
+      const wcRef = doc(collection(db, 'workerCrops'));
+      batch.set(wcRef, {
+        workerId,
+        cropCycleId: legacyCropId,
+        ownerId: uid,
+        createdAt
+      });
+    });
+    
+    await batch.commit();
+    console.log("Preset workers seeding completed successfully.");
+  }
+};
+
 export const migrateLegacyRecords = async (): Promise<void> => {
   const uid = getCurrentUserId();
   if (!isMockMode && !uid) {
@@ -915,6 +1051,9 @@ export const migrateLegacyRecords = async (): Promise<void> => {
   }
   const email = getCurrentUserEmail();
   const legacyCropId = 'legacy_crop_2025_2026';
+
+  // Seed preset workers if database is empty
+  await seedPresetWorkers(uid, email);
 
   // Check completion flag
   if (isMockMode) {
@@ -997,7 +1136,7 @@ export const migrateLegacyRecords = async (): Promise<void> => {
     startDate: '2025-06-01',
     expectedHarvestDate: '2026-03-31',
     actualHarvestDate: '2026-03-31',
-    status: 'completed',
+    status: 'active',
     notes: 'Auto-generated for legacy records.',
     ownerId: uid,
     ownerEmail: email,

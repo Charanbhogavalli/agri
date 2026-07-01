@@ -278,7 +278,7 @@ export default function App() {
       let workerIds: string[] = [];
       if (copyWorkersFlag) {
         const workers = await fetchWorkers();
-        workerIds = workers.filter(w => w.status === 'active').map(w => w.id);
+        workerIds = workers.map(w => w.id);
       }
 
       const newCycle: Omit<CropCycle, 'id' | 'createdAt'> = {
