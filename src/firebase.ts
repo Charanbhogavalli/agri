@@ -279,7 +279,7 @@ export const calculateWorkerEarnings = (worker: Worker, attendance: AttendanceRe
   const workerAtt = attendance.filter(a => a.workerId === worker.id);
   const defaultWage = worker ? (typeof worker.dailyWage === 'number' ? worker.dailyWage : parseFloat(worker.dailyWage as any) || 0) : 0;
   return workerAtt.reduce((sum, a) => {
-    const rawWage = a.wageForDay !== undefined ? a.wageForDay : defaultWage;
+    const rawWage = (a.wageForDay !== undefined && a.wageForDay !== null && (a.wageForDay as any) !== '') ? a.wageForDay : defaultWage;
     const wage = typeof rawWage === 'number' ? rawWage : parseFloat(rawWage as any) || 0;
     if (a.status === 'present') return sum + wage;
     if (a.status === 'half_day') return sum + wage * 0.5;
