@@ -570,7 +570,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         ? t('allCrops', lang) 
                         : (() => {
                             const c = cropCycles.find(c => c.id === selectedCropCycleId);
-                            return c ? `${c.cropName} (${c.season})` : 'Selected Crop';
+                            if (!c) return 'Selected Crop';
+                            if (c.id === 'legacy_crop_2025_2026') return '2025 to 2026';
+                            return `${c.cropName} (${c.season})`;
                           })()
                     })
                   </button>

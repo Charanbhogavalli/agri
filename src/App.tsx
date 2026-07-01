@@ -726,7 +726,9 @@ export default function App() {
                         ? t('allCrops', lang) 
                         : (() => {
                             const c = cropCycles.find(c => c.id === selectedCropCycleId);
-                            return c ? `${c.cropName} (${c.season})` : 'All Crops';
+                            if (!c) return 'All Crops';
+                            if (c.id === 'legacy_crop_2025_2026') return '2025 to 2026';
+                            return `${c.cropName} (${c.season})`;
                           })()
                       }
                     </span>
@@ -767,7 +769,9 @@ export default function App() {
                             className={`w-full text-left px-4 py-2.5 text-xs font-semibold flex items-center justify-between hover:bg-gray-50 ${selectedCropCycleId === crop.id ? 'text-primary bg-primary/5' : 'text-text-dark'}`}
                           >
                             <div className="min-w-0 flex-1">
-                              <span className="block font-bold truncate">{crop.cropName} ({crop.season})</span>
+                              <span className="block font-bold truncate">
+                                {crop.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : `${crop.cropName} (${crop.season})`}
+                              </span>
                               <span className="block text-[9px] text-gray-400 font-semibold">{crop.area || '0 Acres'} • {crop.status === 'completed' ? 'Completed' : 'Active'}</span>
                             </div>
                             {selectedCropCycleId === crop.id && <Check size={12} className="text-primary" />}
@@ -1297,7 +1301,9 @@ const CropsList: React.FC<CropsListProps> = ({
             <div key={c.id} className="bg-gray-50 p-3.5 border border-[#E0DBC5]/40 rounded-2xl flex flex-col gap-2.5">
               <div className="flex justify-between items-start">
                 <div>
-                  <h4 className="font-bold text-sm text-text-dark leading-tight">{c.cropName} ({c.season})</h4>
+                  <h4 className="font-bold text-sm text-text-dark leading-tight">
+                    {c.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : `${c.cropName} (${c.season})`}
+                  </h4>
                   <span className="text-[10px] text-gray-400 font-semibold block mt-1">
                     Variety: {c.variety || 'N/A'} • Irrigation: {c.irrigationType || 'Other'} • Land: {c.landName || 'N/A'} ({c.area || '0'} acres)
                   </span>
@@ -1676,7 +1682,7 @@ const WorkerAssignmentsManager: React.FC<WorkerAssignmentsManagerProps> = ({
           &larr; Back to Crops
         </button>
         <span className="text-gray-300">|</span>
-        <span className="text-xs font-bold text-gray-400">Worker Assignments for: <strong className="text-text-dark">{crop.cropName}</strong></span>
+        <span className="text-xs font-bold text-gray-400">Worker Assignments for: <strong className="text-text-dark">{crop.id === 'legacy_crop_2025_2026' ? '2025 to 2026' : crop.cropName}</strong></span>
       </div>
 
       <div className="relative">

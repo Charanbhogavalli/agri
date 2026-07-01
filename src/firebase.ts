@@ -918,9 +918,9 @@ export const seedPresetWorkers = async (uid: string, email: string): Promise<voi
     if (!crops.some(c => c.id === legacyCropId)) {
       crops.push({
         id: legacyCropId,
-        name: 'Legacy Crop',
-        season: '2025–2026',
-        status: 'active',
+        cropName: '2025 to 2026',
+        season: '2025 to 2026',
+        status: 'completed',
         notes: 'Legacy records pre-migration',
         createdAt,
         ownerId: uid
@@ -932,9 +932,9 @@ export const seedPresetWorkers = async (uid: string, email: string): Promise<voi
     const cSnap = await getDoc(cRef);
     if (!cSnap.exists()) {
       await setDoc(cRef, {
-        name: 'Legacy Crop',
-        season: '2025–2026',
-        status: 'active',
+        cropName: '2025 to 2026',
+        season: '2025 to 2026',
+        status: 'completed',
         notes: 'Legacy records pre-migration',
         createdAt,
         ownerId: uid
@@ -1205,9 +1205,9 @@ export const migrateLegacyRecords = async (): Promise<void> => {
 
   const legacyCrop: CropCycle = {
     id: legacyCropId,
-    cropName: 'Legacy Crop',
+    cropName: '2025 to 2026',
     variety: 'Legacy',
-    season: '2025–2026',
+    season: '2025 to 2026',
     landName: 'Legacy Land',
     area: 'Various',
     irrigationType: 'Other',
