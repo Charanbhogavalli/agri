@@ -1052,15 +1052,17 @@ export const migrateLegacyRecords = async (): Promise<void> => {
   const legacyCropId = 'legacy_crop_2025_2026';
   const createdAt = new Date().toISOString();
 
-  // Check completion flag for v4 backend reset
-  if (isMockMode) {
-    if (localStorage.getItem('paramesh_reset_completed_v4') === 'true') {
-      return;
-    }
-  } else {
+  const completionKey = `paramesh_reset_completed_v4_${uid}`;
+
+  // Check completion flag for v4 backend reset (check localStorage first for instant early return)
+  if (localStorage.getItem(completionKey) === 'true') {
+    return;
+  }
+  if (!isMockMode) {
     try {
       const resetSnap = await getDoc(doc(db, 'migrations', `v4_${uid}`));
       if (resetSnap.exists() && resetSnap.data()?.completed === true) {
+        localStorage.setItem(completionKey, 'true');
         return;
       }
     } catch (e) {
@@ -1220,7 +1222,7 @@ export const migrateLegacyRecords = async (): Promise<void> => {
       const allExpenses = getMockData('paramesh_expenses').filter((e: any) => e.ownerId !== uid);
       setMockData('paramesh_expenses', [...allExpenses, ...rawExpenses]);
 
-      localStorage.removeItem('paramesh_reset_completed_v4');
+      localStorage.removeItem(`paramesh_reset_completed_v4_${uid}`);
     } else {
       try {
         const rollbackBatches: any[] = [];
@@ -1330,7 +1332,7 @@ export const migrateLegacyRecords = async (): Promise<void> => {
       }));
       setMockData('paramesh_expenses', [...otherExpenses, ...newExpenses]);
 
-      localStorage.setItem('paramesh_reset_completed_v4', 'true');
+      localStorage.setItem(`paramesh_reset_completed_v4_${uid}`, 'true');
       localStorage.setItem('paramesh_selected_crop_cycle_id', legacyCropId);
     } else {
       // Firestore batch reset
@@ -1398,7 +1400,7 @@ export const migrateLegacyRecords = async (): Promise<void> => {
       });
 
       // 8. Write migration record
-      addOp('set', doc(db, 'migrations', `v3_${uid}`), {
+      addOp('set', doc(db, 'migrations', `v4_${uid}`), {
         completed: true,
         timestamp: new Date().toISOString(),
         ownerId: uid
@@ -1409,6 +1411,7 @@ export const migrateLegacyRecords = async (): Promise<void> => {
         await b.commit();
       }
 
+      localStorage.setItem(`paramesh_reset_completed_v4_${uid}`, 'true');
       localStorage.setItem('paramesh_selected_crop_cycle_id', legacyCropId);
     }
   } catch (err: any) {
